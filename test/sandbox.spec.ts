@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { BubblewrapSandbox, NodeProcessSandbox, getSandbox } from '../src/host/modules/sandbox/index.ts'
+import { sandboxTools } from '../src/host/modules/sandbox/tools.ts'
 
 describe('SandboxRunner', () => {
   let tmpDir: string
@@ -160,6 +161,35 @@ describe('SandboxRunner', () => {
       expect(s).toBeDefined()
       expect(typeof s.exec).toBe('function')
       expect(typeof s.name).toBe('string')
+    })
+  })
+
+  describe('evo_sandbox_exec availability', () => {
+    it('refuses instead of returning ok:true when the runner has no isolation', async () => {
+      const stub = {
+        name: 'stub',
+        isAvailable: async () => false,
+        exec: async () => { throw new Error('exec must not be reached when unavailable') },
+      }
+      const deps = { ctx: {}, cfg: () => ({}), store: {}, log: () => {}, warn: () => {} }
+      const tool = sandboxTools(deps as never, stub as never).find(t => t.name === 'evo_sandbox_exec')!
+      const result = await tool.execute({ command: 'echo hi' } as never) as { ok: boolean; error: string }
+      expect(result.ok).toBe(false)
+      expect(String(result.error)).toContain('sandbox is not available on this host')
+    })
+
+    it('reports a failed spawn in stderr instead of an empty successful run', async () => {
+      // PATH without bwrap: the spawn fails with ENOENT, and that must not be
+      // indistinguishable from a command that ran and printed nothing.
+      const saved = process.env.PATH
+      process.env.PATH = join(tmpDir, 'empty-path')
+      try {
+        const result = await new BubblewrapSandbox().exec('echo hello', { cwd: tmpDir, timeoutMs: 5000 })
+        expect(result.exitCode).toBeNull()
+        expect(result.stderr).toContain('sandbox spawn failed')
+      } finally {
+        process.env.PATH = saved
+      }
     })
   })
 })

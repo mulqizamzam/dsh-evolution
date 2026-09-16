@@ -180,7 +180,12 @@ function spawnWithTimeout(
     }, options.timeoutMs)
 
     child.on('close', (code, signal) => finish(code, signal ?? undefined))
-    child.on('error', () => finish(null))
+    child.on('error', (error: Error) => {
+      // A failed spawn (missing binary, EACCES) must not be indistinguishable
+      // from a command that ran and printed nothing.
+      stderr += 'sandbox spawn failed: ' + error.message
+      finish(null)
+    })
   })
 }
 

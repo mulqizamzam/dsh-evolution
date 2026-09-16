@@ -11,7 +11,7 @@ export function sandboxTools(deps: ModuleDeps, runner: SandboxRunner): ToolDefin
   return [
     defineTool({
       name: 'evo_sandbox_exec',
-      description: 'Execute a shell command inside a sandboxed environment. Uses bubblewrap (bwrap) when available for filesystem and namespace isolation; falls back to a constrained child process. Returns stdout, stderr, exit code, and timing metadata.',
+      description: 'Execute a shell command inside a sandboxed environment. Requires bubblewrap (bwrap), which supplies the filesystem and namespace isolation; the call is REFUSED when bwrap is unavailable, because the alternative runner would give a candidate-authored command no isolation at all. Returns stdout, stderr, exit code, and timing metadata.',
       parameters: {
         type: 'object',
         properties: {
@@ -68,6 +68,13 @@ export function sandboxTools(deps: ModuleDeps, runner: SandboxRunner): ToolDefin
           timeoutMs,
           allowNetwork,
           env,
+        }
+
+        // Refuse like the promotion pre-flight does: without bwrap the runner
+        // cannot isolate a candidate-authored command, and reporting ok:true
+        // with empty output would read as "the command ran and printed nothing".
+        if (!(await runner.isAvailable())) {
+          return neutralizeDeep({ ok: false, error: 'sandbox is not available on this host' })
         }
 
         deps.log('sandbox: exec "' + command.slice(0, 120) + '" in ' + cwd)

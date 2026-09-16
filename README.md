@@ -101,7 +101,7 @@ Add to `cordis.patch.yml`:
 | `evo_status` | Show evolution status overview |
 | `evo_run_cycle` | Run one analysis/candidate generation cycle |
 | `evo_full_cycle` | Run the complete autonomous cycle (analyze, generate, validate, sandbox, benchmark, promote/reject); requires an LLM endpoint |
-| `evo_sandbox_exec` | Execute a shell command in a sandbox (bubblewrap when available, else a constrained child process) |
+| `evo_sandbox_exec` | Execute a shell command in a sandbox — requires bubblewrap (bwrap); the call is refused when it is unavailable |
 | `evo_activation_status` | Report which version artifact is mounted, which tool it registered, and why activation did not happen |
 | `evo_activation_refresh` | Re-read the active version and mount or unmount its artifact |
 | `evo_health` | Plugin health check |
