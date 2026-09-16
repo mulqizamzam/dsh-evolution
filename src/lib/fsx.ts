@@ -1,5 +1,6 @@
 import { readFile, writeFile, readdir, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
+import { newId } from './ids.ts'
 
 /** Read a JSON file safely; returns null on ENOENT or parse failure. */
 export async function readJsonSafe(path: string): Promise<unknown> {
@@ -13,7 +14,10 @@ export async function readJsonSafe(path: string): Promise<unknown> {
 
 /** Atomic JSON write: write to tmp then rename. */
 export async function writeJsonAtomic(path: string, data: unknown): Promise<void> {
-  const tmp = path + '.tmp.' + String(Date.now())
+  // The temp name must be unique per CALL, not per millisecond: two writers of
+  // the same path inside one millisecond would share one temp file, and the
+  // second rename then fails with ENOENT after the first consumed it.
+  const tmp = path + '.tmp.' + newId()
   await writeFile(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8')
   const { rename } = await import('node:fs/promises')
   await rename(tmp, path)
@@ -30,7 +34,7 @@ export async function readTextSafe(path: string): Promise<string | null> {
 
 /** Atomic text write. */
 export async function writeTextAtomic(path: string, content: string): Promise<void> {
-  const tmp = path + '.tmp.' + String(Date.now())
+  const tmp = path + '.tmp.' + newId()
   await writeFile(tmp, content, 'utf8')
   const { rename } = await import('node:fs/promises')
   await rename(tmp, path)
@@ -41,7 +45,11 @@ export async function listDir(dir: string, limit: number = 500): Promise<string[
   try {
     const entries = await readdir(dir)
     const withMtime: Array<{ name: string; mtime: number }> = []
-    for (const name of entries.slice(0, limit * 2)) {
+    // Every entry must be stat'd before the sort: readdir order is
+    // filesystem-dependent, so pre-slicing to a window would drop entries the
+    // sort never sees — with more files than the window, the newest records
+    // would silently disappear from the result.
+    for (const name of entries) {
       try {
         const s = await stat(join(dir, name))
         if (s.isFile()) withMtime.push({ name, mtime: s.mtimeMs })

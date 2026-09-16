@@ -4,13 +4,26 @@
 # Override BY ROW ID from a later patch layer (the profile's own
 # cordis.patch.yml).
 #
-# Kill switch — keep the row installed but neutralize the plugin (no tools, no
-# observation, no autonomous loop):
+# Kill switch — keep the row installed but stop the autonomous half of the
+# plugin (no observation, no autonomous loop). It is a TOP-LEVEL row override,
+# not an `update:` wrapper:
 #
-#   - update:
-#       - id: dsh-evolution
-#         config:
-#           evolution: { enabled: false }
+#   - id: dsh-evolution
+#     config:
+#       evolution: { enabled: false }
+#
+# Two loader facts decide that syntax (verified against the real patch engine,
+# `applyEntryPatches` in vendor/include):
+#   * A `- update:` wrapper is REJECTED ("patch: id is required for non-insert
+#     patches") and the bundle defaults stay in force — a kill switch that
+#     silently does nothing.
+#   * A row override REPLACES the row's whole `config`, so every field you need
+#     must be restated; an omitted field falls back to the schema default in
+#     src/host/config.ts.
+#
+# `evolution.enabled: false` stops auto-record and the autonomous trigger. The
+# `evo_*` tools stay registered and remain callable by hand; to withdraw those
+# too, drop `dsh-evolution` from the profile's `dsh.profile.bundles` list.
 - insert:
     - id: dsh-evolution
       name: dsh-evolution

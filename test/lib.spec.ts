@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readdir, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -224,5 +224,36 @@ describe('fsx', () => {
     await writeJsonAtomic(join(tmp, 'b.json'), { b: 2 })
     const files = await listDir(tmp)
     expect(files.length).toBe(2)
+  })
+
+  it('writeJsonAtomic survives concurrent writes to the same path', async () => {
+    // Regression: the temp name was `path + '.tmp.' + Date.now()`, so writers
+    // inside one millisecond shared a temp file and every write but the first
+    // rename failed with ENOENT.
+    const path = join(tmp, 'shared.json')
+    await expect(Promise.all([1, 2, 3, 4].map(v => writeJsonAtomic(path, { v })))).resolves.toBeDefined()
+    const data = (await readJsonSafe(path)) as { v: number }
+    expect([1, 2, 3, 4]).toContain(data.v)
+  })
+
+  it('listDir returns the NEWEST limit files even past a readdir-ordered window', async () => {
+    // Regression: listDir used to stat only entries.slice(0, limit * 2) in
+    // readdir order, so the newest records silently vanished once a collection
+    // held more files than that window. The file made newest here is placed at
+    // the END of readdir order, which is always outside that window.
+    const limit = 8
+    const base = Date.now() / 1000 - 10_000
+    for (let i = 0; i < limit * 3; i++) {
+      const path = join(tmp, 'e' + String(i).padStart(3, '0') + '.json')
+      await writeJsonAtomic(path, { i })
+      await utimes(path, base, base + i)
+    }
+    const order = await readdir(tmp)
+    const late = order[order.length - 1]!
+    await utimes(join(tmp, late), base, base + 10_000)
+
+    const files = await listDir(tmp, limit)
+    expect(files.length).toBe(limit)
+    expect(files[0]).toBe(late)
   })
 })

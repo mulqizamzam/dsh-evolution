@@ -21,15 +21,18 @@ Self-evolution system for DeepSeek Harness. Collects task experiences, detects p
                                             ┌────────▼────────┐
                                             │    Benchmark    │
                                             │     Runner      │
-                                            │ 2 tools         │
+                                            │ 4 tools         │
                                             └────────┬────────┘
                                                      │
                                             ┌────────▼────────┐
                                             │  Promotion Mgr  │
                                             │ (promote/       │
                                             │  rollback/list) │
-                                            │ 3 tools         │
+                                            │ 4 tools         │
                                             └─────────────────┘
+
+Beyond this core loop: sandbox execution, the LLM candidate builder, automatic
+turn observation, and boot-time activation of the promoted version.
 
 Storage: File-backed JSON in $DSH_HOME/dsh-evolution/
   ├── experiences/    (append-only experience records)
@@ -79,18 +82,28 @@ Add to `cordis.patch.yml`:
 | `evo_experience_record` | Record a completed task execution |
 | `evo_experience_list` | List recent experiences |
 | `evo_experience_inspect` | Get full details of one experience |
+| `evo_auto_record` | Record a task out-of-band (the host records turns automatically) |
+| `evo_observe_state` | Automatic observation state: turns observed, loop guard counters, thresholds |
 | `evo_analyze_patterns` | Detect recurring patterns from experiences |
 | `evo_analyze_report` | Summary report of all stored patterns |
 | `evo_candidate_create` | Create a new improvement candidate |
 | `evo_candidate_list` | List candidates with optional status filter |
 | `evo_candidate_inspect` | Get full details of one candidate |
+| `evo_builder_generate` | Use the configured host LLM to generate a candidate module (source, tests, manifest, benchmark cases); files are safety-validated before acceptance |
 | `evo_benchmark_run` | Benchmark a candidate against thresholds |
 | `evo_benchmark_compare` | Compare benchmark metrics to thresholds |
+| `evo_benchmark_live` | Execute a command in a live sandbox against a candidate's files (stdout, stderr, exit code, timing) |
+| `evo_benchmark_ab` | A/B benchmark a candidate against its baseline over multiple sandboxed runs |
 | `evo_promote` | Promote a benchmarked candidate to new version |
 | `evo_rollback` | Rollback to a previous version |
 | `evo_promote_list` | List all versions |
+| `evo_promote_decision` | Apply the promotion policy to the latest benchmark evidence; returns promote/reject with the justifying metrics |
 | `evo_status` | Show evolution status overview |
 | `evo_run_cycle` | Run one analysis/candidate generation cycle |
+| `evo_full_cycle` | Run the complete autonomous cycle (analyze, generate, validate, sandbox, benchmark, promote/reject); requires an LLM endpoint |
+| `evo_sandbox_exec` | Execute a shell command in a sandbox (bubblewrap when available, else a constrained child process) |
+| `evo_activation_status` | Report which version artifact is mounted, which tool it registered, and why activation did not happen |
+| `evo_activation_refresh` | Re-read the active version and mount or unmount its artifact |
 | `evo_health` | Plugin health check |
 
 ## Example Evolution Run
@@ -169,14 +182,14 @@ New Active Version ──▶ Previous version preserved for rollback
 npm test
 ```
 
-47 tests covering lib utilities, store operations, tool definitions, and end-to-end evolution cycles.
+151 tests across 14 files covering lib utilities, store operations, tool definitions, and end-to-end evolution cycles.
 
 ## Configuration
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `experience.maxRecords` | 10000 | Maximum stored experiences |
-| `experience.retentionDays` | 90 | Days before experience cleanup |
+| `experience.maxRecords` | 10000 | Maximum stored experiences — **declared but not enforced**: nothing reads this key yet, so `experiences/` grows one file per recorded turn |
+| `experience.retentionDays` | 90 | Days before experience cleanup — **declared but not enforced**, see `maxRecords` |
 | `candidate.maxActive` | 10 | Maximum draft candidates |
 | `benchmark.minRuns` | 3 | Minimum benchmark runs |
 | `benchmark.maxRuns` | 10 | Maximum benchmark runs |
