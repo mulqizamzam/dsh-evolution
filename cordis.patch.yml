@@ -1,0 +1,31 @@
+# dsh-evolution — bundle layer.
+#
+# One insert row. Every value is a PLAIN config field; no `!!js` expressions.
+# Override BY ROW ID from a later patch layer (the profile's own
+# cordis.patch.yml).
+#
+# Kill switch — keep the row installed but neutralize the plugin (no tools, no
+# observation, no autonomous loop):
+#
+#   - update:
+#       - id: dsh-evolution
+#         config:
+#           evolution: { enabled: false }
+- insert:
+    - id: dsh-evolution
+      name: dsh-evolution
+      config:
+        # Conservative defaults live in src/host/config.ts. The values below
+        # are the shipped baseline; a profile overrides them by row id.
+        evolution:
+          enabled: true
+          autoRecord: true
+          autoTrigger: true
+          analysis:
+            minExperiences: 20
+            minOccurrences: 5
+          generation:
+            enabled: false
+          promotion:
+            enabled: false
+          maxCyclesPerProcess: 3

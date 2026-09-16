@@ -1,0 +1,159 @@
+import { errorMessage, makeLogger } from '../lib/errors.ts'
+import { neutralize } from '../lib/sanitize.ts'
+import { resolveStateRoot } from '../lib/home.ts'
+import { Config, DEFAULT_CONFIG, INJECT_LABEL, resolveConfig } from './config.ts'
+import type { EvoConfig } from './config.ts'
+import { EvolutionStore, SCHEMA_VERSION } from './store.ts'
+import type { ModuleDeps } from './types.ts'
+import { JSON_OBJECT_OUTPUT, defineTool, registerToolSafe, text } from './dsh.ts'
+import type { HostContextShape } from './dsh.ts'
+import * as experienceModule from './modules/experience/index.ts'
+import * as analyzeModule from './modules/analyze/index.ts'
+import * as candidateModule from './modules/candidate/index.ts'
+import * as benchmarkModule from './modules/benchmark/index.ts'
+import * as promoteModule from './modules/promote/index.ts'
+import * as evolutionModule from './modules/evolution/index.ts'
+import * as statusModule from './modules/status/index.ts'
+import * as sandboxModule from './modules/sandbox/index.ts'
+import * as builderModule from './modules/builder/index.ts'
+import * as autoExperienceModule from './modules/auto-experience/index.ts'
+import * as activationModule from './modules/activation/index.ts'
+
+export const name = 'dsh-evolution'
+export const VERSION = '0.1.0'
+export const inject = ['tools', 'settings', 'agents']
+
+export interface EvoModule {
+  name: string
+  apply: (deps: ModuleDeps) => void
+}
+
+export const MODULES: EvoModule[] = [
+  experienceModule,
+  analyzeModule,
+  candidateModule,
+  benchmarkModule,
+  promoteModule,
+  evolutionModule,
+  statusModule,
+  sandboxModule,
+  builderModule,
+  autoExperienceModule,
+  // Activation mounts the active version's artifact, so it must run last.
+  activationModule,
+] as unknown as EvoModule[]
+
+/**
+ * Plugin entry (HOST-API §1). The host calls `apply(ctx, config?)` where
+ * config is the row from cordis.patch.yml. We pass it through schemastery
+ * and register a live settings scope so the UI can hot-swap config.
+ */
+export async function apply(rawContext: unknown, rawConfig: Partial<EvoConfig> = {}): Promise<void> {
+  const log = makeLogger('dsh-evolution')
+  const ctx = rawContext as HostContextShape
+  try {
+    // Awaited so the promoted capability is mounted before the first turn.
+    await boot(ctx, rawConfig, log)
+    log.info('ready: ' + MODULES.map(function (m) { return m.name }).join(', '))
+  } catch (error) {
+    const detail = errorMessage(error)
+    console.error('[dsh-evolution] boot failed; registering status-only tool:', detail)
+    log.warn('boot failed: ' + detail)
+    try {
+      registerToolSafe(ctx, defineTool({
+        name: 'evo_status',
+        description: 'dsh-evolution failed to start; this status-only tool reports why. No other evo_* tool is available this session.',
+        parameters: { type: 'object', properties: {} },
+        output: { schema: JSON_OBJECT_OUTPUT, render: function (_args: Record<string, unknown>, value: never) { return text(value) } },
+        execute: async () => ({
+          plugin: 'dsh-evolution',
+          state: 'failed',
+          error: neutralize(detail),
+          hint: 'Fix the cause and restart the host; plugin data on disk is untouched.',
+        }),
+      } as never))
+    } catch {
+      // Even the degraded path failing must not escape.
+    }
+  }
+}
+
+async function boot(ctx: HostContextShape, rawConfig: Partial<EvoConfig>, log: ReturnType<typeof makeLogger>): Promise<void> {
+  // Config: compose defaults with host-provided config, then register a live
+  // settings scope so the UI can hot-swap values without restart.
+  let resolved = resolveConfig(rawConfig)
+  try {
+    const scope = ctx.settings.register<EvoConfig>('dsh-evolution', Config, { base: rawConfig as EvoConfig, applies: 'live' })
+    try {
+      resolved = resolveConfig(scope.get())
+    } catch (error) {
+      log.warn('settings scope read failed, using composed defaults: ' + errorMessage(error))
+    }
+  } catch (error) {
+    // Settings service may be absent in reduced profiles; degrade silently.
+    log.warn('settings.register unavailable: ' + errorMessage(error))
+  }
+
+  // Subscribe to live config updates (mirrors dsh-cortex pattern).
+  try {
+    ctx.on('settings/updated', (function (namespace: string, next: EvoConfig) {
+      if (namespace !== 'dsh-evolution') return
+      try {
+        resolved = resolveConfig(next)
+        log.info('config swapped (live)')
+      } catch (error) {
+        log.warn('config swap failed, keeping previous: ' + errorMessage(error))
+      }
+    }) as never)
+  } catch {
+    // Non-fatal in reduced profiles.
+  }
+
+  // State root: config override > host dshHomePath service > env fallback.
+  const root = resolved.stateRoot !== '' ? resolved.stateRoot : resolveStateRoot(function (name2: string) { return ctx.get(name2) })
+  const store = new EvolutionStore({ get: function (name2: string) { return ctx.get(name2) }, fallbackRoot: root })
+
+  // Awaited: activation below reads the active version from disk, so the
+  // scaffold must exist first.
+  try {
+    await store.init()
+    log.info('state ready at ' + root)
+  } catch (error) {
+    log.warn('state scaffold failed: ' + errorMessage(error))
+  }
+
+  const cfg = function (): typeof resolved { return resolved }
+  const deps: ModuleDeps = {
+    ctx,
+    cfg,
+    store,
+    log: function (message: string) { log.info(message) },
+    warn: function (message: string) { log.warn(message) },
+  }
+
+  for (const module of MODULES) {
+    try {
+      module.apply(deps)
+    } catch (error) {
+      log.warn('module "' + module.name + '" failed, continuing: ' + errorMessage(error))
+    }
+  }
+
+  // Boot-time activation (Step 13): a fresh host discovers the promoted
+  // version's artifact and mounts it. Never fatal — a host with no active
+  // version, or an artifact that fails pre-flight, boots normally.
+  try {
+    const { refreshActivation, activationState } = await import('./modules/activation/loader.ts')
+    await refreshActivation(deps)
+    const state = activationState()
+    if (state.activeTool !== null) {
+      log.info('activated ' + state.activeTool + ' from ' + String(state.activeVersionId))
+    } else {
+      log.info('no candidate activated: ' + String(state.reason ?? 'unknown'))
+    }
+  } catch (error) {
+    log.warn('activation failed at boot: ' + errorMessage(error))
+  }
+}
+
+export { Config, DEFAULT_CONFIG, INJECT_LABEL, resolveConfig, EvolutionStore, SCHEMA_VERSION }
