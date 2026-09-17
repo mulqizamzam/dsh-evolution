@@ -375,6 +375,18 @@ export function builderTools(deps: ModuleDeps): ToolDefinition[] {
           return neutralizeDeep({ ok: false, error: 'Candidate validation failed', errors: validation.errors })
         }
 
+        // Populate candidate.evidenceIds by resolving the experience IDs
+        // referenced by each matched pattern. patternIds stay as-is; only
+        // evidenceIds carries experience IDs.
+        const resolvedEvidenceIds = new Set<string>()
+        for (const p of patterns) {
+          if (Array.isArray(p.evidenceIds)) {
+            for (const eid of p.evidenceIds) {
+              if (typeof eid === 'string' && eid !== '') resolvedEvidenceIds.add(eid)
+            }
+          }
+        }
+
         // Store the candidate FIRST: the store is the id authority, and the
         // on-disk directory must be candidates/<candidate-id>/ — a locally
         // invented directory name would diverge from the id every later tool
@@ -385,7 +397,7 @@ export function builderTools(deps: ModuleDeps): ToolDefinition[] {
           name: fileSet.manifest.name,
           description: fileSet.manifest.description,
           reason: 'LLM-generated from patterns: ' + patterns.map(p => p.id).join(', '),
-          evidenceIds: [],
+          evidenceIds: [...resolvedEvidenceIds],
           patternIds,
           files: fileSet.files,
           tests: fileSet.tests,

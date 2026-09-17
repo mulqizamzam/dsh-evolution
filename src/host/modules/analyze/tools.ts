@@ -7,7 +7,7 @@ const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'te
 
 /** Lightweight heuristic pattern detector over recorded experiences. */
 export function detectPatterns(experiences: ExperienceRecord[], minOccurrences: number): Array<Omit<Pattern, 'id' | 'createdAt'>> {
-  const bySignature = new Map<string, { count: number; sample: string }>()
+  const bySignature = new Map<string, { count: number; sample: string; evidenceIds: string[] }>()
   let successCount = 0
 
   for (const e of experiences) {
@@ -17,8 +17,9 @@ export function detectPatterns(experiences: ExperienceRecord[], minOccurrences: 
       ? String(e.errors[0])
       : (e.summary ?? 'unknown-outcome')
     const signature = clampText(seed, 80)
-    const entry = bySignature.get(signature) ?? { count: 0, sample: signature }
+    const entry = bySignature.get(signature) ?? { count: 0, sample: signature, evidenceIds: [] }
     entry.count++
+    if (e.id) entry.evidenceIds.push(e.id)
     bySignature.set(signature, entry)
   }
 
@@ -31,7 +32,7 @@ export function detectPatterns(experiences: ExperienceRecord[], minOccurrences: 
       evidence: 'INFERENCE',
       description: `Recurring signature observed ${data.count} times: ${signature}`,
       occurrences: data.count,
-      evidenceIds: [],
+      evidenceIds: [...new Set(data.evidenceIds)],
       confidence: Math.min(0.95, 0.4 + data.count * 0.05),
     })
   }
@@ -47,7 +48,7 @@ export function detectPatterns(experiences: ExperienceRecord[], minOccurrences: 
         evidence: 'INFERENCE',
         description: `Failed runs average ${avg.toFixed(1)} steps; likely redundant or retried work.`,
         occurrences: failed.length,
-        evidenceIds: [],
+        evidenceIds: [...new Set(failed.map(e => e.id).filter((id): id is string => typeof id === 'string'))],
         confidence: Math.min(0.9, 0.3 + failed.length * 0.05),
       })
     }
