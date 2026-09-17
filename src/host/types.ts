@@ -91,6 +91,12 @@ export interface BenchmarkRun {
   thresholds?: BenchmarkConfig
   /** Parent version the candidate was measured against. */
   parentVersion?: string
+  /**
+   * The operator-owned trusted exit code the benchmark expected.
+   * Present when the live or A/B tool was called with an explicit
+   * expectedExitCode — the same value used for per-case classification.
+   */
+  expectedExitCode?: number
   /** Baseline side metrics for an A/B run. */
   baselineMetrics?: BenchmarkMetrics
   /** Comparative deltas for an A/B run. */
@@ -276,6 +282,16 @@ export interface BenchmarkExecutionResult {
   stderr: string
   exitCode: number | null
   timedOut: boolean
+  /**
+   * The trusted operator-provided exit code expected for task success.
+   * When present, the runner compares the actual exit code against this value
+   * and classifies accordingly; when absent, exit-0 is treated as success
+   * (legacy-compatible). This field is the independent benchmark oracle —
+   * candidate-generated metadata is NOT read from here.
+   */
+  expectedExitCode?: number
+  /** Written evidence of the per-case oracle evaluation decision. */
+  evaluation?: string
 }
 
 export interface ABenchmarkRun {
