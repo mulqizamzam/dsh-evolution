@@ -4,6 +4,7 @@ import type { HostSessionEvent, HostSessionView, ObservedTurn } from '../../type
 import { detectPatterns } from '../analyze/tools.ts'
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
+import { activationState } from '../activation/loader.ts'
 
 export const name = 'auto-experience'
 export const TOOLS = ['evo_auto_record', 'evo_observe_state'] as const
@@ -297,6 +298,7 @@ export function apply(deps: ModuleDeps): void {
 
       if (observations.length < 50) observations.push(observed)
 
+      const versionId = activationState().activeVersionId
       void store.addExperience({
         taskId: observed.sessionId + '#' + observed.turn,
         prompt: observed.prompt,
@@ -308,6 +310,9 @@ export function apply(deps: ModuleDeps): void {
         errors: observed.errors,
         durationMs: observed.durationMs,
         stepCount: observed.stepCount,
+        // Preserve version identity so post-promotion observations can be
+        // attributed to the version that was active at the time.
+        versionId: versionId ?? undefined,
         metadata: {
           sessionId: observed.sessionId,
           turn: observed.turn,

@@ -61,6 +61,16 @@ export class EvolutionStore {
     return records
   }
 
+  /**
+   * Return only experiences that were recorded while a specific version was
+   * active.  Used by post-promotion monitoring to attribute outcomes to the
+   * version that was mounted at the time.
+   */
+  async listExperiencesByVersion(versionId: string, limit: number = 50): Promise<ExperienceRecord[]> {
+    const all = await this.listExperiences(limit * 10)  // fetch more, filter client-side
+    return all.filter((e): e is ExperienceRecord & { versionId: string } => e.versionId === versionId).slice(0, limit)
+  }
+
   // ── Patterns ──
 
   private patternDir(): string { return join(this.root, 'patterns') }

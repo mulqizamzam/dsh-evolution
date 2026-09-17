@@ -18,6 +18,7 @@ import * as sandboxModule from './modules/sandbox/index.ts'
 import * as builderModule from './modules/builder/index.ts'
 import * as autoExperienceModule from './modules/auto-experience/index.ts'
 import * as activationModule from './modules/activation/index.ts'
+import * as versionHistoryModule from './modules/version-history/index.ts'
 
 export const name = 'dsh-evolution'
 export const VERSION = '0.1.0'
@@ -41,6 +42,7 @@ export const MODULES: EvoModule[] = [
   autoExperienceModule,
   // Activation mounts the active version's artifact, so it must run last.
   activationModule,
+  versionHistoryModule,
 ] as unknown as EvoModule[]
 
 /**

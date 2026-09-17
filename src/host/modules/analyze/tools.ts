@@ -5,6 +5,88 @@ import { neutralizeDeep } from '../../../lib/sanitize.ts'
 
 const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'text'; text: string }> => text(value)
 
+/** Minimum observations required before a version is considered to have enough data for a signal. */
+const VERSION_OBSERVATION_MIN = 5
+
+/** Degradation thresholds — conservative so a single blip is not a signal. */
+const DEGRADATION_SUCCESS_RATE_THRESHOLD = 0.6
+const DEGRADATION_ERROR_RATE_THRESHOLD = 0.3
+
+export interface VersionDegradationSignal {
+  versionId: string
+  total: number
+  successRate: number
+  errorRate: number
+  avgStepCount: number
+  isDegraded: boolean
+  signals: string[]
+}
+
+/**
+ * Compute a per-version degradation signal from the full experience set.
+ *
+ * Only flags a version as degraded when there are enough observations and the
+ * aggregate metrics cross the thresholds — not a single bad turn. This keeps
+ * the signal conservative and avoids noise from short observation windows.
+ */
+export function detectVersionDegradation(experiences: ExperienceRecord[]): VersionDegradationSignal | null {
+  const byVersion = new Map<string, ExperienceRecord[]>()
+  for (const e of experiences) {
+    if (!e.versionId) continue
+    const list = byVersion.get(e.versionId) ?? []
+    list.push(e)
+    byVersion.set(e.versionId, list)
+  }
+
+  if (byVersion.size === 0) return null
+
+  let weakest: VersionDegradationSignal | null = null
+  for (const [versionId, records] of byVersion) {
+    if (records.length < VERSION_OBSERVATION_MIN) continue
+
+    const successCount = records.filter(r => r.success).length
+    const successRate = successCount / records.length
+    const errorRecords = records.filter(r => !r.success)
+    const errorRate = errorRecords.length / records.length
+
+    const stepCounts = errorRecords
+      .map(r => r.stepCount ?? 0)
+      .filter(n => n > 0)
+    const avgStepCount = stepCounts.length > 0
+      ? stepCounts.reduce((s, n) => s + n, 0) / stepCounts.length
+      : 0
+
+    const signals: string[] = []
+    const isDegraded = successRate < DEGRADATION_SUCCESS_RATE_THRESHOLD || errorRate > DEGRADATION_ERROR_RATE_THRESHOLD
+    if (successRate < DEGRADATION_SUCCESS_RATE_THRESHOLD) {
+      signals.push('success-rate-low:' + (successRate * 100).toFixed(1) + '%')
+    }
+    if (errorRate > DEGRADATION_ERROR_RATE_THRESHOLD) {
+      signals.push('error-rate-high:' + (errorRate * 100).toFixed(1) + '%')
+    }
+    if (avgStepCount >= 15) {
+      signals.push('high-step-count:' + avgStepCount.toFixed(1))
+    }
+
+    const signal: VersionDegradationSignal = {
+      versionId,
+      total: records.length,
+      successRate,
+      errorRate,
+      avgStepCount,
+      isDegraded,
+      signals,
+    }
+
+    // Surface the worst signal so callers can prioritise.
+    if (weakest === null || signal.total > weakest.total) {
+      weakest = signal
+    }
+  }
+
+  return weakest
+}
+
 /** Lightweight heuristic pattern detector over recorded experiences. */
 export function detectPatterns(experiences: ExperienceRecord[], minOccurrences: number): Array<Omit<Pattern, 'id' | 'createdAt'>> {
   const bySignature = new Map<string, { count: number; sample: string; evidenceIds: string[] }>()

@@ -24,6 +24,7 @@ export function experienceTools(deps: ModuleDeps): ToolDefinition[] {
           stepCount: { type: 'number', description: 'Optional number of agent steps taken.' },
           errors: { type: 'array', items: { type: 'string' }, description: 'Optional list of error messages encountered.' },
           metadata: { type: 'object', description: 'Optional free-form metadata map.' },
+          versionId: { type: 'string', description: 'Optional evolution version ID active at the time of this outcome. Set by auto-observation; manual callers may pass it explicitly.' },
         },
         required: ['success'],
       },
@@ -40,6 +41,7 @@ export function experienceTools(deps: ModuleDeps): ToolDefinition[] {
           stepCount: typeof a.stepCount === 'number' ? a.stepCount : undefined,
           errors: Array.isArray(a.errors) ? a.errors.map(String) : undefined,
           metadata: a.metadata && typeof a.metadata === 'object' ? (a.metadata as Record<string, unknown>) : undefined,
+          versionId: typeof a.versionId === 'string' && a.versionId !== '' ? a.versionId : undefined,
         }
         const created = await store.addExperience(record)
         return neutralizeDeep(created)
