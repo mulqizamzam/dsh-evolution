@@ -248,9 +248,19 @@ export interface BenchmarkCase {
 
 /**
  * Three-way classification of a sandbox execution as an end-to-end outcome.
- * The benchmark treats "the process exited zero" as *necessary* but not
- * *sufficient* for task success — stdout must also carry observable signal
- * when the candidate manifest asks for it.
+ *
+ * - `execution-failure`:    the process never completed normally
+ *                           (OOM kill, timeout, or spawn failure).
+ * - `unsuccessful-outcome`: the process ran and terminated, but its exit
+ *                           code was non-zero — application-level failure.
+ * - `task-successful`:      the process exited 0.
+ *
+ * NOTE: `task-successful` currently means "the process exited zero" — it is
+ * equivalent to the legacy `passed` boolean. It does NOT verify that the
+ * candidate produced the expected output, because the runner does not
+ * evaluate `BenchmarkCase.expectedOutput`. Until that is added,
+ * `task-successful` should be read as "process succeeded", not "task
+ * completed its intended work".
  */
 export type BenchmarkOutcome = 'task-successful' | 'unsuccessful-outcome' | 'execution-failure'
 
