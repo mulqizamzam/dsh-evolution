@@ -11,6 +11,8 @@ export interface ExperienceRecord {
   timestamp: string
   taskId?: string
   agentVersion?: string
+  /** The evolution version ID active at the time this outcome was observed. */
+  versionId?: string
   prompt?: string
   summary?: string
   toolCalls?: Array<{ name: string; args?: unknown; result?: unknown }>
@@ -244,10 +246,20 @@ export interface BenchmarkCase {
   requiredTools?: string[]
 }
 
+/**
+ * Three-way classification of a sandbox execution as an end-to-end outcome.
+ * The benchmark treats "the process exited zero" as *necessary* but not
+ * *sufficient* for task success — stdout must also carry observable signal
+ * when the candidate manifest asks for it.
+ */
+export type BenchmarkOutcome = 'task-successful' | 'unsuccessful-outcome' | 'execution-failure'
+
 export interface BenchmarkExecutionResult {
   caseId: string
   passed: boolean
   score: number
+  /** Three-way outcome: distinguishes process-success from task-success. */
+  outcome: BenchmarkOutcome
   error?: string
   durationMs: number
   stdout: string
@@ -354,6 +366,8 @@ export interface ObservedTurn {
   stepCount: number
   durationMs: number
   toolCallNames: string[]
+  /** The evolution version ID active when this turn ran. */
+  versionId?: string
 }
 
 export type { ToolDefinition } from './dsh.ts'

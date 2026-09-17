@@ -3,6 +3,7 @@ import type { BenchmarkConfig, BenchmarkExecutionResult, BenchmarkMetrics, Modul
 import { DEFAULT_PROMOTION_POLICY } from '../../types.ts'
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
+import { classifyOutcome } from './outcome.ts'
 import { getSandbox } from '../sandbox/index.ts'
 import { mkdtemp, rm, mkdir, writeFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -50,8 +51,10 @@ function evaluate(metrics: BenchmarkMetrics, cfg: BenchmarkConfig): { passed: bo
 /** Derive metrics from a set of execution results. */
 function metricsFromResults(results: BenchmarkExecutionResult[]): BenchmarkMetrics {
   const total = Math.max(1, results.length)
-  const successCount = results.filter(r => r.passed).length
-  const errored = results.filter(r => r.exitCode !== 0 && !r.timedOut).length
+  // Task-level counts: "passed" = the process ran and produced non-empty output
+  const successCount = results.filter(r => r.outcome === 'task-successful').length
+  // Execution-level failures: OOM, timeout, or spawn failure
+  const errored = results.filter(r => r.outcome === 'execution-failure').length
   const scores = results.map(r => r.score)
   const durations = results.map(r => r.durationMs)
   return computeMetrics(total, successCount, scores, errored, [], durations)
@@ -215,11 +218,15 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             allowNetwork,
           })
 
+          // Process-level pass (exit 0 and no timeout) — preserved as a
+          // diagnostic signal alongside the richer outcome classification.
           const passed = result.exitCode === 0 && !result.timedOut
+          const outcome = classifyOutcome(result)
           const executionResult: BenchmarkExecutionResult = {
             caseId: 'live-exec-' + candidateId,
             passed,
-            score: passed ? 1.0 : 0.0,
+            score: outcome === 'task-successful' ? 1.0 : 0.0,
+            outcome,
             error: result.stderr || undefined,
             durationMs: result.durationMs,
             stdout: clampText(result.stdout, 10_000),
@@ -231,9 +238,9 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
           // Evidence produced by REAL execution must be recorded, or the
           // deterministic gate has nothing to decide on.
           const liveMetrics: BenchmarkMetrics = {
-            successRate: passed ? 1 : 0,
-            avgScore: passed ? 1 : 0,
-            errorRate: passed ? 0 : 1,
+            successRate: outcome === 'task-successful' ? 1 : 0,
+            avgScore: outcome === 'task-successful' ? 1 : 0,
+            errorRate: outcome === 'execution-failure' ? 1 : 0,
             avgSteps: 0,
             avgDurationMs: result.durationMs,
           }
@@ -250,7 +257,8 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             passed,
             details: clampText(
               'live sandbox execution (' + sandbox.name + '): exit ' + String(result.exitCode)
-              + (result.timedOut ? ', timed out' : ''),
+              + (result.timedOut ? ', timed out' : '')
+              + ', outcome=' + outcome,
               500,
             ),
           })
@@ -262,6 +270,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             command,
             sandbox: sandbox.name,
             executionResult,
+            outcome,
             filesWritten,
             benchmarkRunId: record.id,
             metrics: liveMetrics,
@@ -325,10 +334,12 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
               allowNetwork,
             })
             const passed = execResult.exitCode === 0 && !execResult.timedOut
+            const outcome = classifyOutcome(execResult)
             results.push({
               caseId: `${sideLabel}-run-${i + 1}`,
               passed,
-              score: passed ? 1.0 : 0.0,
+              score: outcome === 'task-successful' ? 1.0 : 0.0,
+              outcome,
               error: execResult.stderr || undefined,
               durationMs: execResult.durationMs,
               stdout: clampText(execResult.stdout, 10_000),
