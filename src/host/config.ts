@@ -96,9 +96,30 @@ export type ResolvedConfig = EvoConfig
 
 export const INJECT_LABEL = 'evolution'
 
+/**
+ * Parse a raw host config into a ResolvedConfig, applying defaults.
+ *
+ * Throws a descriptive Error when the input cannot be validated so callers
+ * can decide whether to fail boot or log a warning. This is an *intentional*
+ * surface: silent fallback to DEFAULT_CONFIG masked all malformed inputs
+ * until a P7 audit flagged it as a gap.
+ */
 export function resolveConfig(raw: unknown): ResolvedConfig {
+  const result = Config(raw as Parameters<typeof Config>[0]) as ResolvedConfig
+  return result
+}
+
+/**
+ * Parse like {@link resolveConfig} but return DEFAULT_CONFIG on any failure.
+ *
+ * Use this only in the startup path (boot) where a hard-fail is acceptable:
+ * the plugin's degraded evo_status tool then reports the failure to the
+ * operator. For all tool-level code paths, call {@link resolveConfig} and
+ * catch explicitly.
+ */
+export function resolveConfigSafe(raw: unknown): ResolvedConfig {
   try {
-    return Config(raw as Parameters<typeof Config>[0]) as ResolvedConfig
+    return resolveConfig(raw)
   } catch {
     return DEFAULT_CONFIG
   }

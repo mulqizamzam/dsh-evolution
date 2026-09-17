@@ -123,7 +123,19 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
         const a = (args ?? {}) as Record<string, unknown>
         const steps: string[] = []
 
-        // ── STEP 1: OBSERVE ──
+        // ── SAFETY GATE ──
+        // Respect the same generation/promotion switches the auto-cycle uses.
+        // A manual tool call must never bypass the operator's disable gate.
+        const cfg = deps.cfg().evolution
+        if (!cfg.generation.enabled) {
+          return neutralizeDeep({
+            ok: false,
+            steps: ['observe'],
+            error: 'evo_full_cycle: autonomous candidate generation is disabled by config (evolution.generation.enabled = false)',
+          })
+        }
+
+        // STEP 1: OBSERVE
         steps.push('observe')
         const experiences = await store.listExperiences(500)
         if (experiences.length === 0) {
@@ -267,6 +279,20 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
 
         // ── STEP 8: PROMOTE or REJECT ──
         steps.push('promote-or-reject')
+
+        // Generation is gated above; promotion must also stay gated so the
+        // tool cannot silently promote without explicit operator consent.
+        if (!cfg.promotion.enabled) {
+          await store.updateCandidate(generatedCandidateId, { status: 'rejected' })
+          return neutralizeDeep({
+            ok: false,
+            steps,
+            verdict: 'REJECTED',
+            candidateId: generatedCandidateId,
+            reason: 'promotion is disabled by config (evolution.promotion.enabled = false)',
+          })
+        }
+
         if (!benchmarkPassed) {
           await store.updateCandidate(generatedCandidateId, { status: 'rejected' })
           return neutralizeDeep({
