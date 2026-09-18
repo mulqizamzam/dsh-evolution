@@ -308,8 +308,9 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
         }
 
         // Mark as benchmarked, then promote via the shared promotion authority.
-        // This ensures the comparative beats_active gate and activeMetrics
-        // capture behave identically to the manual evo_promote path.
+        // runPromotionPolicy enforces the comparative beats_active gate at the
+        // version-creation boundary, so both autonomous (evo_full_cycle) and
+        // manual (evo_promote) paths are protected by the same policy.
         await store.updateCandidate(generatedCandidateId, { status: 'benchmarked' })
 
         // Compute the probe version id that runPromotionPolicy will use

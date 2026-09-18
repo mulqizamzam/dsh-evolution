@@ -72,9 +72,15 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           })
         }
 
-        // Delegate version creation, candidate status update, and activation
-        // refresh to the shared promotion authority so all promotion paths
-        // carry identical activeMetrics capture and provenance fields.
+        // Delegate version creation to the shared promotion authority.
+        // The comparative beats_active gate is enforced inside
+        // runPromotionPolicy at the final mutation boundary, so even a
+        // candidate that passed the sandbox pre-flight here is still
+        // rejected if its success rate is not greater than the active
+        // version's. This mirrors the autonomous path: evo_full_cycle
+        // (no sandbox pre-flight) and evo_promote (with sandbox
+        // pre-flight) both reach the same boundary and are protected
+        // by the same policy.
         const result = await runPromotionPolicy(deps, candidate,
           clampText(typeof a.reason === 'string' ? a.reason : '', 500), plannedVersionId)
         if (!result.ok) {

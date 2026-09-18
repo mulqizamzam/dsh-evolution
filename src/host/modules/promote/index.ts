@@ -8,14 +8,16 @@ export const readEndpoints = {}
 export const writeEndpoints = {}
 
 /**
- * Shared promotion execution: creates the new Version with captured
- * activeMetrics, updates the candidate to 'promoted', rewrites the
- * artifact if the store-assigned id differs from the probe id, and
- * refreshes the in-memory activation state.
+ * Shared promotion execution: enforces the comparative `beats_active` gate
+ * before creating the new Version, then captures activeMetrics for
+ * provenance, updates the candidate to 'promoted', rewrites the artifact if
+ * the store-assigned id differs from the probe id, and refreshes the
+ * in-memory activation state.
  *
- * This must be called by ALL production promotion paths so that the
- * comparative `beats_active` gate (enforced in evo_promote_decision
- * before this function is reached) is never bypassed.
+ * This is the single authoritative promotion boundary: ALL production
+ * promotion paths (manual evo_promote and autonomous evo_full_cycle) must
+ * call this function. The gate here ensures that no path can promote a
+ * candidate that is worse than or equal to the active version.
  */
 export async function runPromotionPolicy(
   deps: ModuleDeps,
@@ -27,8 +29,11 @@ export async function runPromotionPolicy(
   const { materializeArtifact } = await import('../activation/artifact.ts')
   const { refreshActivation, activationState } = await import('../activation/loader.ts')
 
-  // Capture the current active version's latest benchmark metrics so the
-  // new Version record carries a baseline for future promotion cycles.
+  // ── beats_active gate (comparative promotion safety) ──
+  // Find the active version's latest live benchmark metrics to compare
+  // the candidate against.  Skipped when there is no comparable active
+  // baseline (first-ever version, or no live benchmark on the active
+  // module).  Tie with active = reject (monotonicity).
   const activeBeforePromote = await store.getActiveVersion()
   let capturedActiveMetrics: import('../../types.ts').BenchmarkMetrics | undefined
   if (activeBeforePromote?.modules?.length) {
@@ -40,6 +45,24 @@ export async function runPromotionPolicy(
     const activeModuleBench = activeModuleBenches[0]
     if (activeModuleBench) {
       capturedActiveMetrics = activeModuleBench.metrics
+    }
+  }
+
+  // Find the candidate's latest live benchmark metrics.
+  const allCandidateBenchmarks = await store.listBenchmarks(500)
+  const candidateBenchmarks = allCandidateBenchmarks
+    .filter(b => b.candidateId === candidate.id)
+    .sort((a, b) => a.createdAt > b.createdAt ? -1 : 1)
+  const candidateLatest = candidateBenchmarks[0]
+
+  if (capturedActiveMetrics && candidateLatest && candidateLatest.mode !== 'simulated') {
+    const activeSuccessRate = capturedActiveMetrics.successRate
+    const candidateSuccessRate = candidateLatest.metrics.successRate
+    if (candidateSuccessRate <= activeSuccessRate) {
+      return {
+        ok: false,
+        error: `beats_active gate failed: candidate success rate ${(candidateSuccessRate * 100).toFixed(1)}% is not greater than active version ${(activeSuccessRate * 100).toFixed(1)}%`,
+      }
     }
   }
 
