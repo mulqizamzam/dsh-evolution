@@ -71,11 +71,31 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           })
         }
 
+        // Capture the current active version's benchmarked success rate so
+        // that subsequent promotion cycles can compare against a known
+        // baseline rather than a static threshold floor.  For the first
+        // version (no active) this is omitted — the version record has no
+        // activeMetrics field.
+        const activeBeforePromote = await store.getActiveVersion()
+        let capturedActiveMetrics: import('../../types.ts').BenchmarkMetrics | undefined
+        if (activeBeforePromote?.modules?.length) {
+          const activeModuleId = activeBeforePromote.modules[0]
+          const allBenches = await store.listBenchmarks(500)
+          const activeModuleBenches = allBenches
+            .filter(b => b.candidateId === activeModuleId)
+            .sort((x, y) => x.createdAt > y.createdAt ? -1 : 1)
+          const activeModuleBench = activeModuleBenches[0]
+          if (activeModuleBench) {
+            capturedActiveMetrics = activeModuleBench.metrics
+          }
+        }
+
         const version = await store.createVersion({
           label: candidate.name,
           reason: clampText(typeof a.reason === 'string' ? a.reason : '', 500),
           promotedFrom: candidate.parentVersion,
           modules: [candidate.id],
+          activeMetrics: capturedActiveMetrics,
         })
         await store.updateCandidate(candidateId, { status: 'promoted' })
 
@@ -200,6 +220,23 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
         const thresholdCfg = candidate.benchmarkConfig
         const m = latest.metrics
 
+        // Find the active version's latest benchmark metrics to compare the
+        // candidate against.  For the first-ever version this will be null,
+        // so the gate is skipped.  For subsequent versions this prevents a
+        // candidate from replacing an objectively better active version.
+        const activeVersion = await store.getActiveVersion()
+        let activeMetrics: { successRate: number } | null = null
+        if (activeVersion?.modules?.length) {
+          const activeModuleId = activeVersion.modules[0]
+          const activeModuleBenchmarks = allBenchmarks
+            .filter(b => b.candidateId === activeModuleId)
+            .sort((x, y) => x.createdAt > y.createdAt ? -1 : 1)
+          const activeModuleBench = activeModuleBenchmarks[0]
+          if (activeModuleBench && activeModuleBench.mode !== 'simulated') {
+            activeMetrics = activeModuleBench.metrics
+          }
+        }
+
         // Compute deltas against the configured thresholds (thresholds act as the baseline).
         const successDelta = m.successRate - thresholdCfg.successRate.min
         const errorDelta = m.errorRate - thresholdCfg.errorRate.max
@@ -253,6 +290,20 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           actual: latencyRatio.toFixed(2) + 'x',
           threshold: policy.maxLatencyMultiplier + 'x',
         })
+
+        // 6. Candidate must not be worse than the active version under the
+        //    same trusted evaluation.  Skipped when there is no comparable
+        //    active baseline (first-ever version, or no live benchmark on
+        //    the active module).  Tie with active = reject (monotonicity).
+        if (activeMetrics) {
+          const activeSuccessRate = activeMetrics.successRate
+          checks.push({
+            gate: 'beats_active',
+            pass: m.successRate > activeSuccessRate,
+            actual: (m.successRate * 100).toFixed(1) + '%',
+            threshold: (activeSuccessRate * 100).toFixed(1) + '% (must exceed active version)',
+          })
+        }
 
         const failedChecks = checks.filter(c => !c.pass)
         const promote = failedChecks.length === 0

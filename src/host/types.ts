@@ -131,6 +131,14 @@ export interface Version {
   reason?: string
   status: 'active' | 'rolled-back'
   modules: string[]
+  /**
+   * The benchmark metrics measured against the active version when this
+   * version was promoted.  Captured at `createVersion` time from the
+   * candidate's latest `BenchmarkRun` so that subsequent promotion
+   * decisions can compare the new candidate against the *known* active
+   * performance.  Absent for the first-ever version.
+   */
+  activeMetrics?: BenchmarkMetrics
 }
 
 /** The only surface a module may depend on. */

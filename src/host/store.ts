@@ -172,7 +172,7 @@ export class EvolutionStore {
     return versions.find(v => v.status === 'active') ?? versions[0] ?? null
   }
 
-  async createVersion(data: { label: string; reason?: string; promotedFrom?: string; benchmarkRunId?: string; modules: string[] }): Promise<Version> {
+  async createVersion(data: { label: string; reason?: string; promotedFrom?: string; benchmarkRunId?: string; activeMetrics?: import('./types.ts').BenchmarkMetrics; modules: string[] }): Promise<Version> {
     const versions = await this.listVersions()
     const nextNumber = versions.length === 0 ? 1 : Math.max(...versions.map(v => v.number)) + 1
     const version: Version = {
@@ -185,6 +185,7 @@ export class EvolutionStore {
       reason: data.reason,
       status: 'active',
       modules: data.modules,
+      activeMetrics: data.activeMetrics,
     }
     // Mark existing active version as rolled-back
     const active = await this.getActiveVersion()
