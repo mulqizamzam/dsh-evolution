@@ -381,7 +381,7 @@ describe('P6 oracle: operator-owned expectedExitCode', () => {
       const rec = stored.find(r => r.candidateId === candidateId)!
       expect(rec.expectedExitCode).toBe(0)
       // details must reference the oracle
-      expect(rec.details).toContain('expected=0')
+      expect(rec.details).toContain('expectedExit=0')
     })
   })
 

@@ -3,7 +3,7 @@ import type { BenchmarkConfig, BenchmarkExecutionResult, BenchmarkMetrics, Modul
 import { DEFAULT_PROMOTION_POLICY } from '../../types.ts'
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
-import { classifyOutcome } from './outcome.ts'
+import { classifyOutcome, evaluateExpectedOutput } from './outcome.ts'
 import { getSandbox } from '../sandbox/index.ts'
 import { mkdtemp, rm, mkdir, writeFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -174,6 +174,11 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             description:
               'The operator-owned expected exit code for task success. When provided, the actual exit code is compared against this value to classify the outcome. Candidate-generated metadata is never read for this value.',
           },
+          expectedOutput: {
+            type: 'string',
+            description:
+              'The operator-owned expected stdout content (exact string or /regex/ literal). When provided, stdout is evaluated against it regardless of exit code. Supersedes exit-code-only classification when both are set. Candidate-generated metadata is never read for this value.',
+          },
         },
         required: ['candidateId', 'command'],
       },
@@ -185,6 +190,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
         const timeoutMs = typeof a.timeoutMs === 'number' ? a.timeoutMs : 30_000
         const allowNetwork = typeof a.allowNetwork === 'boolean' ? a.allowNetwork : false
         const expectedExitCode = typeof a.expectedExitCode === 'number' ? a.expectedExitCode : undefined
+        const expectedOutput = typeof a.expectedOutput === 'string' ? a.expectedOutput : undefined
 
         if (!candidateId || !command) {
           return neutralizeDeep({ ok: false, error: 'candidateId and command are required' })
@@ -224,10 +230,8 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             allowNetwork,
           })
 
-          // Process-level pass (exit 0 and no timeout) — preserved as a
-          // diagnostic signal alongside the richer outcome classification.
-          const passed = result.exitCode === 0 && !result.timedOut
-          const outcome = classifyOutcome(result, expectedExitCode)
+          // Functional + process outcome classification (operator-owned oracles).
+          const outcome = classifyOutcome(result, expectedExitCode, expectedOutput)
 
           // Build evaluation evidence string for the benchmark record.
           let evaluation: string
@@ -237,6 +241,13 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             evaluation = 'Timeout: execution exceeded ' + timeoutMs + 'ms; cannot evaluate'
           } else if (result.exitCode === null && result.stderr.length > 0) {
             evaluation = 'Spawn failure: ' + result.stderr.slice(0, 200)
+          } else if (typeof expectedOutput === 'string') {
+            // Functional oracle was used — report both functional and process evidence.
+            const evalResult = evaluateExpectedOutput(result.stdout, expectedOutput)
+            evaluation = evalResult.detail
+            + (typeof expectedExitCode === 'number'
+              ? '; process: exit ' + String(result.exitCode) + (result.exitCode === expectedExitCode ? ' matches' : ' does not match') + ' expected ' + expectedExitCode
+              : '')
           } else if (typeof expectedExitCode === 'number') {
             evaluation = result.exitCode === expectedExitCode
               ? 'exit code ' + result.exitCode + ' matches expected ' + expectedExitCode
@@ -281,12 +292,14 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             thresholds: candidate.benchmarkConfig,
             command: clampText(command, 500),
             expectedExitCode,
+            expectedOutput,
             passed: outcome === 'task-successful',
             details: clampText(
               'live sandbox execution (' + sandbox.name + '): exit ' + String(result.exitCode)
               + (result.timedOut ? ', timed out' : '')
               + ', outcome=' + outcome
-              + (typeof expectedExitCode === 'number' ? ', expected=' + expectedExitCode : ''),
+              + (typeof expectedExitCode === 'number' ? ', expectedExit=' + expectedExitCode : '')
+              + (typeof expectedOutput === 'string' ? ', expectedOutput=(' + expectedOutput.slice(0, 60) + ')' : ''),
               500,
             ),
           })
@@ -300,6 +313,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             executionResult,
             outcome,
             expectedExitCode,
+            expectedOutput,
             filesWritten,
             benchmarkRunId: record.id,
             metrics: liveMetrics,
@@ -314,7 +328,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
 
     defineTool({
       name: 'evo_benchmark_ab',
-      description: 'Run an A/B benchmark comparing a candidate against its baseline by executing a command in a sandbox for multiple runs and computing comparative metrics. When expectedExitCode is provided, it is used as the trusted oracle for both sides — independent of any candidate-generated metadata.',
+      description: 'Run an A/B benchmark comparing a candidate against its baseline by executing a command in a sandbox for multiple runs and computing comparative metrics. When expectedExitCode and/or expectedOutput are provided, they are used as the trusted oracles for both sides — independent of any candidate-generated metadata.',
       parameters: {
         type: 'object',
         properties: {
@@ -328,6 +342,11 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             description:
               'The operator-owned expected exit code for task success. When provided, the actual exit code is compared against this value to classify outcomes for both baseline and candidate.',
           },
+          expectedOutput: {
+            type: 'string',
+            description:
+              'The operator-owned expected stdout content (exact string or /regex/ literal). When provided, stdout is evaluated against it for both sides. Supersedes exit-code-only classification. Candidate-generated metadata is never read.',
+          },
         },
         required: ['candidateId', 'command'],
       },
@@ -340,6 +359,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
         const timeoutMs = typeof a.timeoutMs === 'number' ? a.timeoutMs : 30_000
         const allowNetwork = typeof a.allowNetwork === 'boolean' ? a.allowNetwork : false
         const expectedExitCode = typeof a.expectedExitCode === 'number' ? a.expectedExitCode : undefined
+        const expectedOutput = typeof a.expectedOutput === 'string' ? a.expectedOutput : undefined
 
         if (!candidateId || !command) {
           return neutralizeDeep({ ok: false, error: 'candidateId and command are required' })
@@ -368,7 +388,12 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
               timeoutMs,
               allowNetwork,
             })
-            const outcome = classifyOutcome(execResult, expectedExitCode)
+            const outcome = classifyOutcome(execResult, expectedExitCode, expectedOutput)
+            // Build evaluation evidence when functional oracle is used.
+            let evaluation: string | undefined
+            if (typeof expectedOutput === 'string') {
+              evaluation = evaluateExpectedOutput(execResult.stdout, expectedOutput).detail
+            }
             results.push({
               caseId: `${sideLabel}-run-${i + 1}`,
               passed: outcome === 'task-successful',
@@ -381,6 +406,8 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
               exitCode: execResult.exitCode,
               timedOut: execResult.timedOut,
               expectedExitCode,
+              expectedOutput,
+              evaluation,
             })
           }
           return results
@@ -513,6 +540,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             thresholds: candidate.benchmarkConfig,
             command: clampText(command, 500),
             expectedExitCode,
+            expectedOutput,
             passed,
             details: clampText(details, 500),
           })

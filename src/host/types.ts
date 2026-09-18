@@ -97,6 +97,13 @@ export interface BenchmarkRun {
    * expectedExitCode — the same value used for per-case classification.
    */
   expectedExitCode?: number
+  /**
+   * The operator-owned expected stdout content. Present when the live or A/B
+   * tool was called with an explicit expectedOutput — the same value used
+   * for per-case functional classification. Supersedes exit-code-only
+   * classification when both are provided.
+   */
+  expectedOutput?: string
   /** Baseline side metrics for an A/B run. */
   baselineMetrics?: BenchmarkMetrics
   /** Comparative deltas for an A/B run. */
@@ -290,6 +297,15 @@ export interface BenchmarkExecutionResult {
    * candidate-generated metadata is NOT read from here.
    */
   expectedExitCode?: number
+  /**
+   * The trusted operator-provided expected stdout content.
+   * When present, the runner compares the actual stdout against this value
+   * (exact string or /regex/ literal) and classifies accordingly.
+   * Functional outcome takes precedence over process-level outcome.
+   * This field is the functional benchmark oracle — candidate-generated
+   * metadata is NOT read from here.
+   */
+  expectedOutput?: string
   /** Written evidence of the per-case oracle evaluation decision. */
   evaluation?: string
 }
