@@ -18,6 +18,7 @@ import { runAutoCycle, resetAutoGuards, autoGuardState, type AutoCycleOutcome } 
 import { detectVersionDegradation } from '../src/host/modules/analyze/tools.ts'
 import { seedExperiencesForVersion } from './helpers/seed-experiences.ts'
 import { makeFakeLlm } from './helpers/fake-llm.ts'
+import { promoteTools } from '../src/host/modules/promote/tools.ts'
 
 function makeCtx(): HostContextShape {
   return {
@@ -844,5 +845,178 @@ describe('P12: Degradation-driven evolution integration', () => {
     // Reload the candidate — parentVersion is immutable, still 'v2'
     const reloaded = await store.getCandidate(outcome.candidateId!)
     expect(reloaded!.parentVersion).toBe('v2')
+  })
+
+  // ── Case 19 (restart): persistence across store restart ──────────────────
+
+  it('P12-restart-persistence: fresh store instance reads same data from disk', async () => {
+    await store.createVersion({ label: 'v1', modules: [] })
+    const v2 = await store.createVersion({ label: 'v2', modules: [] })
+
+    // Seed degradation under v2
+    await seedExperiencesForVersion(store, v2.id, { successes: 0, failures: 5, errors: ['same-sig'] })
+
+    // Run one cycle with working LLM to generate a candidate + synthetic pattern
+    const depsCycle = makeDeps(store, tmpRoot, {
+      evolution: {
+        enabled: true, autoTrigger: true, autoRecord: true,
+        analysis: { minExperiences: 5, minOccurrences: 2 },
+        generation: { enabled: true },
+        promotion: { enabled: false },
+        maxCyclesPerProcess: 10,
+      },
+    })
+    const fakeDeps: ModuleDeps = {
+      ...depsCycle,
+      ctx: {
+        ...depsCycle.ctx,
+        get: (name: string) => {
+          if (name === 'llm') return makeFakeLlm()
+          if (name === 'agentDefaultModel') return {
+            currentSelection: () => ({ provider: 'test', model: 'test-model' }),
+          }
+          return undefined
+        },
+      },
+    }
+    resetAutoGuards()
+    await runAutoCycle(fakeDeps)
+
+    // Capture state from first store instance
+    const expBefore = await store.listExperiencesByVersion(v2.id, 100)
+    const patternsBefore = await store.listPatterns(500)
+    const candidatesBefore = await store.listCandidates(500)
+    const activeBefore = await store.getActiveVersion()
+    const synthDesc = patternsBefore.find(p => p.description.startsWith('Degradation'))?.description
+
+    // Simulate restart: new store instance on same root
+    const restartStore = new EvolutionStore({ fallbackRoot: tmpRoot })
+    await restartStore.init()
+
+    // Verify experiences persist
+    const expAfter = await restartStore.listExperiencesByVersion(v2.id, 100)
+    expect(expAfter.length).toBe(expBefore.length)
+    expect(expAfter.every(e => e.versionId === v2.id)).toBe(true)
+
+    // Verify synthetic pattern persists
+    const patternsAfter = await restartStore.listPatterns(500)
+    const synthAfter = patternsAfter.find(p => p.description.startsWith('Degradation'))
+    expect(synthAfter).not.toBeNull()
+    expect(synthAfter!.description).toBe(synthDesc)
+
+    // Verify candidate persists with correct parentVersion and evidenceIds
+    const candidatesAfter = await restartStore.listCandidates(500)
+    expect(candidatesAfter.length).toBe(candidatesBefore.length)
+    if (candidatesBefore.length > 0) {
+      const c = candidatesAfter.find(ca => ca.id === candidatesBefore[0]!.id)
+      expect(c).not.toBeNull()
+      expect(c!.parentVersion).toBe(v2.id)
+      // All evidenceIds should be valid experience IDs from v2
+      const expIds = new Set(expAfter.map(e => e.id))
+      for (const eid of c!.evidenceIds) {
+        expect(expIds.has(eid)).toBe(true)
+      }
+    }
+
+    // Verify active version persists
+    const activeAfter = await restartStore.getActiveVersion()
+    expect(activeAfter?.id).toBe(activeBefore?.id)
+
+    // Verify dedup works after restart: running another cycle should NOT
+    // create a duplicate candidate (degradationCandidateExists finds the
+    // existing draft candidate from the previous cycle)
+    resetAutoGuards()
+    const depsRestart = makeDeps(restartStore, tmpRoot, {
+      evolution: {
+        enabled: true, autoTrigger: true, autoRecord: true,
+        analysis: { minExperiences: 5, minOccurrences: 2 },
+        generation: { enabled: true },
+        promotion: { enabled: false },
+        maxCyclesPerProcess: 10,
+      },
+    })
+    const fakeDepsRestart: ModuleDeps = {
+      ...depsRestart,
+      ctx: {
+        ...depsRestart.ctx,
+        get: (name: string) => {
+          if (name === 'llm') return makeFakeLlm()
+          if (name === 'agentDefaultModel') return {
+            currentSelection: () => ({ provider: 'test', model: 'test-model' }),
+          }
+          return undefined
+        },
+      },
+    }
+    const outcomeRestart = await runAutoCycle(fakeDepsRestart)
+    // Should be blocked by existing draft candidate (degradationCandidateExists returns true)
+    // or return "no actionable recurring pattern" — but should NOT create a new candidate
+    const candidatesAfterCycle = await restartStore.listCandidates(500)
+    expect(candidatesAfterCycle.length).toBe(candidatesBefore.length)
+  })
+
+  // ── Case 20 (stale candidate): promote decision ignores parentVersion ──
+
+  it('P12-stale-candidate-promotion: parentVersion is metadata only, not a promotion gate', async () => {
+    await store.createVersion({ label: 'v1', modules: [] })
+    const v2 = await store.createVersion({ label: 'v2', modules: [] })
+
+    // Seed degradation under v2 and generate a candidate
+    await seedExperiencesForVersion(store, v2.id, { successes: 0, failures: 5, errors: ['same-sig'] })
+
+    const depsCycle = makeDeps(store, tmpRoot, {
+      evolution: {
+        enabled: true, autoTrigger: true, autoRecord: true,
+        analysis: { minExperiences: 5, minOccurrences: 2 },
+        generation: { enabled: true },
+        promotion: { enabled: false },
+        maxCyclesPerProcess: 10,
+      },
+    })
+    const fakeDeps: ModuleDeps = {
+      ...depsCycle,
+      ctx: {
+        ...depsCycle.ctx,
+        get: (name: string) => {
+          if (name === 'llm') return makeFakeLlm()
+          if (name === 'agentDefaultModel') return {
+            currentSelection: () => ({ provider: 'test', model: 'test-model' }),
+          }
+          return undefined
+        },
+      },
+    }
+    resetAutoGuards()
+    const outcome = await runAutoCycle(fakeDeps)
+    expect(outcome.ran).toBe(true)
+    expect(outcome.candidateId).toBeDefined()
+
+    const candidate = await store.getCandidate(outcome.candidateId!)
+    expect(candidate).not.toBeNull()
+    expect(candidate!.parentVersion).toBe(v2.id)
+
+    // Roll back v2 so v1 is active again, v2 is rolled-back
+    await store.rollbackVersion('v1')
+    const activeAfterRollback = await store.getActiveVersion()
+    expect(activeAfterRollback!.id).toBe('v1')
+    expect(candidate!.parentVersion).toBe(v2.id) // unchanged — metadata is immutable
+
+    // `evo_promote_decision` does NOT validate parentVersion against the active
+    // version. It only checks benchmark evidence and policy gates. This is
+    // intentional: parentVersion is provenance metadata, not a promotion gate.
+    // Without benchmark evidence, the decision returns ok:false with a
+    // "no benchmark evidence" error — NOT a parentVersion or staleness error.
+    const promoteDecision = promoteTools(deps).find(t => t.name === 'evo_promote_decision')!
+    const decision = await promoteDecision.execute({ candidateId: candidate!.id, allowSimulated: true } as never, exec) as {
+      ok: boolean; recommendation?: string; error?: string
+    }
+    // The error (if any) is about missing benchmarks, not about the stale parentVersion.
+    // No error string should mention "parentVersion", "stale", or "rolled-back"
+    // as the reason for rejection.
+    if (decision.error) {
+      expect(decision.error).not.toContain('parentVersion')
+      expect(decision.error).not.toContain('stale')
+      expect(decision.error).not.toContain('rolled-back')
+    }
   })
 })

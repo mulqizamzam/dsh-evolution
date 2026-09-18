@@ -172,11 +172,30 @@ async function detectDegradationContext(
   const signal = detectVersionDegradation(records)
   if (!signal || !signal.isDegraded) return null
 
-  // Dedup: skip if a non-terminal candidate for this exact degradation already exists.
+  // Dedup: skip if a non-terminal candidate for this exact degradation already
+  // exists. We check by BOTH:
+  //   (a) synthetic-description match (legacy path, where candidate.description
+  //       happened to equal the synthetic description — rare but possible)
+  //   (b) (parentVersion, evidenceIds overlap): a candidate already generated
+  //       for this version's degradation will have parentVersion === the
+  //       version ID and evidenceIds drawn from the same experience set,
+  //       regardless of which pattern triggered the builder call.
   const desc = synthDegradationDescription(signal.versionId, signal.signals)
   if (await degradationCandidateExists(deps, desc)) return null
 
   const evidenceIds = records.map(r => r.id).filter((id): id is string => typeof id === 'string')
+
+  // (b) Overlap check — covers candidates created through the pattern-driven
+  //     path where the builder's patternIds point to a recurrence pattern,
+  //     not the synthetic degradation pattern.
+  const candidates = await deps.store.listCandidates(500)
+  for (const c of candidates) {
+    if (c.status === 'promoted' || c.status === 'rejected') continue
+    if (c.parentVersion !== signal.versionId) continue
+    if (!Array.isArray(c.evidenceIds) || c.evidenceIds.length === 0) continue
+    const hasOverlap = evidenceIds.some(eid => c.evidenceIds!.includes(eid))
+    if (hasOverlap) return null
+  }
 
   return {
     versionId: signal.versionId,
