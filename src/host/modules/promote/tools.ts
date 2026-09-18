@@ -3,6 +3,7 @@ import type { ModuleDeps, ToolDefinition } from '../../types.ts'
 import { DEFAULT_PROMOTION_POLICY } from '../../types.ts'
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
+import { runPromotionPolicy } from './index.ts'
 
 const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'text'; text: string }> => text(value)
 
@@ -71,45 +72,19 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           })
         }
 
-        // Capture the current active version's benchmarked success rate so
-        // that subsequent promotion cycles can compare against a known
-        // baseline rather than a static threshold floor.  For the first
-        // version (no active) this is omitted — the version record has no
-        // activeMetrics field.
-        const activeBeforePromote = await store.getActiveVersion()
-        let capturedActiveMetrics: import('../../types.ts').BenchmarkMetrics | undefined
-        if (activeBeforePromote?.modules?.length) {
-          const activeModuleId = activeBeforePromote.modules[0]
-          const allBenches = await store.listBenchmarks(500)
-          const activeModuleBenches = allBenches
-            .filter(b => b.candidateId === activeModuleId)
-            .sort((x, y) => x.createdAt > y.createdAt ? -1 : 1)
-          const activeModuleBench = activeModuleBenches[0]
-          if (activeModuleBench) {
-            capturedActiveMetrics = activeModuleBench.metrics
-          }
+        // Delegate version creation, candidate status update, and activation
+        // refresh to the shared promotion authority so all promotion paths
+        // carry identical activeMetrics capture and provenance fields.
+        const result = await runPromotionPolicy(deps, candidate,
+          clampText(typeof a.reason === 'string' ? a.reason : '', 500), plannedVersionId)
+        if (!result.ok) {
+          return neutralizeDeep({ ok: false, error: result.error })
         }
-
-        const version = await store.createVersion({
-          label: candidate.name,
-          reason: clampText(typeof a.reason === 'string' ? a.reason : '', 500),
-          promotedFrom: candidate.parentVersion,
-          modules: [candidate.id],
-          activeMetrics: capturedActiveMetrics,
-        })
-        await store.updateCandidate(candidateId, { status: 'promoted' })
-
-        // The store may assign a different id than the probe used; make the
-        // mounted artifact match the real active version.
-        if (version.id !== plannedVersionId) {
-          await materializeArtifact(store.getRoot(), version, candidate)
-        }
-        await refreshActivation(deps)
         const state = activationState()
 
         return neutralizeDeep({
           ok: true,
-          version,
+          version: result.version,
           candidateId,
           activation: { mountedVersionId: state.activeVersionId, mountedTool: state.activeTool, reason: state.reason },
         })

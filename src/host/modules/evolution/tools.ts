@@ -3,6 +3,7 @@ import type { CandidateType, ModuleDeps, PatternType, ToolDefinition } from '../
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
 import { detectPatterns } from '../analyze/tools.ts'
+import { runPromotionPolicy } from '../promote/index.ts'
 
 const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'text'; text: string }> => text(value)
 
@@ -306,22 +307,51 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
           })
         }
 
-        // Mark as benchmarked, then promote
+        // Mark as benchmarked, then promote via the shared promotion authority.
+        // This ensures the comparative beats_active gate and activeMetrics
+        // capture behave identically to the manual evo_promote path.
         await store.updateCandidate(generatedCandidateId, { status: 'benchmarked' })
-        const version = await store.createVersion({
-          label: clampText('auto: ' + strongestPattern.description.slice(0, 80), 200),
-          reason: 'Autonomous evolution cycle promoted candidate ' + generatedCandidateId,
-          promotedFrom: parentVersion,
-          modules: [generatedCandidateId],
-        })
-        await store.updateCandidate(generatedCandidateId, { status: 'promoted' })
+
+        // Compute the probe version id that runPromotionPolicy will use
+        const versionNumber = (await store.listVersions(200)).reduce((max, v) => Math.max(max, v.number), 0) + 1
+        const plannedVersionId = 'v' + String(versionNumber)
+
+        const candidate = await store.getCandidate(generatedCandidateId)
+        if (!candidate) {
+          await store.updateCandidate(generatedCandidateId, { status: 'rejected' })
+          return neutralizeDeep({
+            ok: false,
+            steps,
+            verdict: 'REJECTED',
+            candidateId: generatedCandidateId,
+            reason: 'candidate ' + generatedCandidateId + ' not found in store',
+          })
+        }
+
+        const promoResult = await runPromotionPolicy(
+          deps,
+          candidate,
+          clampText('auto: ' + strongestPattern.description.slice(0, 80), 200),
+          plannedVersionId,
+        )
+        if (!promoResult.ok) {
+          await store.updateCandidate(generatedCandidateId, { status: 'rejected' })
+          return neutralizeDeep({
+            ok: false,
+            steps,
+            verdict: 'REJECTED',
+            candidateId: generatedCandidateId,
+            pattern: strongestPattern.id,
+            reason: 'promotion failed: ' + promoResult.error,
+          })
+        }
 
         return neutralizeDeep({
           ok: true,
           steps,
           verdict: 'PROMOTED',
           candidateId: generatedCandidateId,
-          versionId: version.id,
+          versionId: promoResult.version.id,
           pattern: strongestPattern.id,
           benchResult: benchResult ?? null,
         })
