@@ -10,6 +10,12 @@ import type {
 export interface StoreOptions {
   get?: ContextGet
   fallbackRoot?: string
+  /**
+   * Optional profile name (e.g. 'web', 'evo-live'). When supplied, the
+   * resolved root is scoped under <home>/dsh-evolution/<profile> so that
+   * different profiles maintain independent mutable state.
+   */
+  profileName?: string
   now?: () => Date
 }
 
@@ -21,7 +27,7 @@ export class EvolutionStore {
   private nowFn: () => Date
 
   constructor(options: StoreOptions) {
-    this.root = resolveStateRoot(options.get, options.fallbackRoot)
+    this.root = resolveStateRoot(options.get, options.fallbackRoot, options.profileName)
     this.nowFn = options.now ?? (() => new Date())
   }
 

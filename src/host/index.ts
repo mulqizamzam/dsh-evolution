@@ -111,9 +111,38 @@ async function boot(ctx: HostContextShape, rawConfig: Partial<EvoConfig>, log: R
     // Non-fatal in reduced profiles.
   }
 
-  // State root: config override > host dshHomePath service > env fallback.
-  const root = resolved.stateRoot !== '' ? resolved.stateRoot : resolveStateRoot(function (name2: string) { return ctx.get(name2) })
-  const store = new EvolutionStore({ get: function (name2: string) { return ctx.get(name2) }, fallbackRoot: root })
+  // Derive the running profile name from the host's baseUrl so the state root
+  // is scoped per-profile and two independently-launched profiles cannot bleed
+  // into each other's mutable evolution namespace.
+  let profileName: string | undefined
+  try {
+    const ctxRecord = ctx as unknown as Record<string, unknown>
+    const baseUrl = typeof ctxRecord.baseUrl === 'string'
+      ? ctxRecord.baseUrl
+      : ''
+    if (baseUrl) {
+      const url = new URL(baseUrl)
+      // Extract the profile name from the last path segment before STATE_DIR_NAME.
+      // e.g. file:///path/to/dsh/profiles/web/ → 'web'
+      const dirPath = url.pathname
+      const parts = dirPath.split('/')
+      const idx = parts.lastIndexOf('profiles')
+      if (idx >= 0 && idx + 1 < parts.length) {
+        const name = parts[idx + 1]
+        if (name && /^[a-z0-9_-]+$/.test(name)) profileName = name
+      }
+    }
+  } catch {
+    // ignore: non-standard baseUrl or parse failure; fall back to flat path
+  }
+
+  // State root: config override > host dshHomePath service (profile-scoped) > env fallback.
+  const root = resolved.stateRoot !== '' ? resolved.stateRoot : resolveStateRoot(
+    function (name2: string) { return ctx.get(name2) },
+    undefined,
+    profileName,
+  )
+  const store = new EvolutionStore({ get: function (name2: string) { return ctx.get(name2) }, fallbackRoot: root, profileName })
 
   // Awaited: activation below reads the active version from disk, so the
   // scaffold must exist first.

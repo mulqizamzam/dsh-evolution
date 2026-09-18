@@ -11,18 +11,42 @@ export type DshHomePath = (...segments: string[]) => string
 export type ContextGet = (name: string) => unknown
 
 /**
- * Resolve the state root.
- * The host dshHomePath service wins; fallback is env-based.
+ * Profile-aware state root resolution.
+ *
+ * When a profile name is supplied, the state root is namespaced under it
+ * so that different DSH profiles (e.g. "web" vs "evo-live") keep fully
+ * independent mutable evolution state.  Without a profile name the legacy
+ * flat path is returned for backward compatibility.
+ *
+ * Precedence:
+ *   1. Explicit stateRoot in plugin config  (operator-authorized, always wins)
+ *   2. Profile-namespaced dshHomePath        (prevents cross-profile bleed)
+ *   3. Env fallback $DSH_HOME/dsh-evolution  (legacy, flat)
  */
-export function resolveStateRoot(get: ContextGet | undefined, fallbackRoot: string = envStateRoot()): string {
-  try {
-    const service = typeof get === 'function' ? get('dshHomePath') : undefined
-    if (typeof service !== 'function') return fallbackRoot
-    const value = (service as DshHomePath)(STATE_DIR_NAME)
-    return typeof value === 'string' && value !== '' ? value : fallbackRoot
-  } catch {
-    return fallbackRoot
+export function resolveStateRoot(
+  get: ContextGet | undefined,
+  fallbackRoot: string | undefined,
+  profileName?: string,
+): string {
+  // Resolve the base root: service wins, then env fallback.
+  let base: string
+  if (fallbackRoot !== undefined && fallbackRoot !== '') {
+    base = fallbackRoot
+  } else {
+    try {
+      const service = typeof get === 'function' ? get('dshHomePath') : undefined
+      if (typeof service !== 'function') base = envStateRoot()
+      else {
+        const value = (service as DshHomePath)(STATE_DIR_NAME)
+        base = typeof value === 'string' && value !== '' ? value : envStateRoot()
+      }
+    } catch {
+      base = envStateRoot()
+    }
   }
+
+  // Append profile namespace when available.
+  return profileName ? join(base, profileName) : base
 }
 
 /**
