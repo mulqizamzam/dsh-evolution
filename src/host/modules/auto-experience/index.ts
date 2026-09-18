@@ -1,7 +1,8 @@
 import { registerToolSafe, JSON_OBJECT_OUTPUT, text } from '../../dsh.ts'
 import type { ModuleDeps, ToolDefinition } from '../../types.ts'
 import type { HostSessionEvent, HostSessionView, ObservedTurn } from '../../types.ts'
-import { detectPatterns } from '../analyze/tools.ts'
+import { detectPatterns, detectVersionDegradation } from '../analyze/tools.ts'
+import type { VersionDegradationSignal } from '../analyze/tools.ts'
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
 import { activationState } from '../activation/loader.ts'
@@ -130,6 +131,145 @@ export interface AutoCycleOutcome {
   verdict?: string
 }
 
+/** Deterministic description for a synthetic degradation pattern. */
+function synthDegradationDescription(versionId: string, signals: string[]): string {
+  return 'Degradation ' + versionId + ': ' + signals.join('; ')
+}
+
+/**
+ * Determine whether a candidate for the given degradation context already
+ * exists in a non-terminal status. Returns true if it does.
+ */
+async function degradationCandidateExists(deps: ModuleDeps, desc: string): Promise<boolean> {
+  const candidates = await deps.store.listCandidates(500)
+  return candidates.some(c => c.description === desc && c.status !== 'promoted' && c.status !== 'rejected')
+}
+
+/**
+ * Determine whether a synthetic pattern with the given description already
+ * exists in the store. Returns true if it does.
+ */
+async function syntheticPatternExists(deps: ModuleDeps, desc: string): Promise<boolean> {
+  const patterns = await deps.store.listPatterns(500)
+  return patterns.some(p => p.description === desc)
+}
+
+/**
+ * Check whether the active version has a degradation signal and whether a
+ * candidate for that signal already exists. Returns { versionId, evidenceIds,
+ * signals, total, description } when the version is degraded and no active
+ * candidate is already queued, or null otherwise.
+ */
+async function detectDegradationContext(
+  deps: ModuleDeps,
+): Promise<{ versionId: string; evidenceIds: string[]; signals: string[]; total: number; description: string } | null> {
+  const active = await deps.store.getActiveVersion()
+  if (!active) return null
+
+  const records = await deps.store.listExperiencesByVersion(active.id, 500)
+  if (records.length < 5) return null
+
+  const signal = detectVersionDegradation(records)
+  if (!signal || !signal.isDegraded) return null
+
+  // Dedup: skip if a non-terminal candidate for this exact degradation already exists.
+  const desc = synthDegradationDescription(signal.versionId, signal.signals)
+  if (await degradationCandidateExists(deps, desc)) return null
+
+  const evidenceIds = records.map(r => r.id).filter((id): id is string => typeof id === 'string')
+
+  return {
+    versionId: signal.versionId,
+    evidenceIds,
+    signals: signal.signals,
+    total: signal.total,
+    description: desc,
+  }
+}
+
+/**
+ * Create the synthetic degradation pattern if it does not already exist.
+ * Returns the pattern id, or null if the pattern was already present.
+ */
+async function ensureSyntheticPattern(deps: ModuleDeps, ctx: {
+  description: string; total: number; evidenceIds: string[]
+}): Promise<string | null> {
+  if (await syntheticPatternExists(deps, ctx.description)) return null
+  const pattern = await deps.store.addPattern({
+    type: 'failure',
+    evidence: 'FACT',
+    description: ctx.description,
+    occurrences: ctx.total,
+    evidenceIds: ctx.evidenceIds,
+    confidence: Math.min(0.95, 0.5 + ctx.total * 0.02),
+  })
+  return pattern.id
+}
+
+/**
+ * Run one degradation-driven synthesis when no pattern-driven patterns are
+ * available. Returns a non-null outcome only when a degradation-driven
+ * candidate was actually created; otherwise returns null so the caller can
+ * fall through to the generic "no patterns" response.
+ */
+async function detectDegradationAndSynthesize(deps: ModuleDeps): Promise<AutoCycleOutcome | null> {
+  const cfg = deps.cfg().evolution
+  const ctx = await detectDegradationContext(deps)
+  if (!ctx) return null
+
+  const genEnabled = cfg.generation.enabled
+  const patternId = await ensureSyntheticPattern(deps, ctx)
+  if (patternId === null) {
+    // A candidate already exists (handled by detectDegradationContext) — or the
+    // synthetic pattern is already stored from a prior cycle without a
+    // corresponding candidate. Report but do not create another.
+    return { ran: true, reason: 'degradation detected; already handled in prior cycle', patterns: 0 }
+  }
+
+  if (!genEnabled) {
+    return { ran: true, reason: 'degradation detected; generation disabled', patterns: 1, candidateId: undefined }
+  }
+
+  // Delegate to the same builder pipeline as pattern-driven generation.
+  // The builder reads pattern.evidenceIds (experience IDs) and uses
+  // patternIds for attribution — both stay correct for synthetic patterns.
+  const { builderTools } = await import('../builder/tools.ts')
+  const build = builderTools(deps).find(t => t.name === 'evo_builder_generate')
+  if (!build) {
+    return { ran: true, reason: 'builder unavailable', patterns: 1 }
+  }
+
+  const built = await build.execute({
+    patternIds: [patternId],
+    parentVersion: ctx.versionId,
+  } as never, { signal: AbortSignal.timeout(180_000) }) as { ok?: boolean; candidateId?: string; error?: string }
+
+  if (built?.ok !== true || typeof built.candidateId !== 'string') {
+    return { ran: true, reason: 'generation failed: ' + String(built?.error ?? 'unknown'), patterns: 1 }
+  }
+
+  if (!cfg.promotion.enabled) {
+    return { ran: true, reason: 'candidate generated; promotion disabled', patterns: 1, candidateId: built.candidateId }
+  }
+
+  const { promoteTools } = await import('../promote/tools.ts')
+  const decision = promoteTools(deps).find(t => t.name === 'evo_promote_decision')
+  if (!decision) {
+    return { ran: true, reason: 'promote module unavailable', patterns: 1 }
+  }
+
+  const verdict = await decision.execute({ candidateId: built.candidateId } as never, { signal: AbortSignal.timeout(60_000) }) as {
+    ok?: boolean; recommendation?: string
+  }
+  return {
+    ran: true,
+    reason: 'candidate generated and evaluated from degradation signal',
+    patterns: 1,
+    candidateId: built.candidateId,
+    verdict: verdict?.recommendation,
+  }
+}
+
 /**
  * Run analysis (and optionally generation + promotion) when enough evidence
  * exists. Deterministic host code owns every safety decision; the LLM only
@@ -170,10 +310,34 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
 
     guards.lastCycleExperienceCount = experiences.length
 
-    if (fresh.length === 0) return { ran: false, reason: 'no actionable recurring pattern', patterns: 0 }
+    if (fresh.length === 0) {
+      // No recurrence-based patterns detected; check whether the active version
+      // shows degradation and synthesize a candidate from the signal.
+      const degraded = await detectDegradationAndSynthesize(deps)
+      if (degraded) return degraded
+      return { ran: false, reason: 'no actionable recurring pattern', patterns: 0 }
+    }
 
     guards.cyclesRun += 1
     deps.log('auto-cycle: ' + fresh.length + ' new pattern(s) from ' + experiences.length + ' experiences')
+
+    // If the active version is degraded, prepend a synthetic degradation
+    // pattern so downstream stages can react to it independently of the
+    // recurrence-based patterns.  Deduplication is handled by the deterministic
+    // description template inside detectDegradationContext.
+    const degradedCtx = await detectDegradationContext(deps)
+    if (degradedCtx) {
+      const synthPattern = await deps.store.addPattern({
+        type: 'failure',
+        evidence: 'FACT',
+        description: degradedCtx.description,
+        occurrences: degradedCtx.total,
+        evidenceIds: degradedCtx.evidenceIds,
+        confidence: Math.min(0.95, 0.5 + degradedCtx.total * 0.02),
+      })
+      fresh.unshift({ id: synthPattern.id, confidence: synthPattern.confidence })
+      deps.log('auto-cycle: degradation signal detected for ' + degradedCtx.versionId)
+    }
 
     if (!cfg.generation.enabled) {
       return { ran: true, reason: 'patterns recorded; generation disabled', patterns: fresh.length }
