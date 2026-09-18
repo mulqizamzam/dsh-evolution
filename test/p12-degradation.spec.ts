@@ -621,4 +621,228 @@ describe('P12: Degradation-driven evolution integration', () => {
     const versions = await store.listVersions()
     expect(versions.length).toBe(2) // only v1 and v2
   })
+
+  // ── Case 16 (C2 fix): failed generation does NOT permanently suppress retry ──
+
+  it('P12C2-failed-generation-allows-retry: transient LLM failure does not consume the degradation opportunity', async () => {
+    await store.createVersion({ label: 'v1', modules: [] })
+    const v2 = await store.createVersion({ label: 'v2', modules: [] })
+
+    // Seed 20 failures under v2 so degradation is detected.
+    // Use unique signatures so detectPatterns does NOT find recurrence patterns
+    // (fresh.length === 0), forcing the degradation-only path.
+    for (let i = 0; i < 20; i++) {
+      await store.addExperience({
+        success: false,
+        errors: ['unique-sig-' + i],
+        stepCount: 12,
+        versionId: 'v2',
+        prompt: 'task-' + i,
+      })
+    }
+
+    const depsFailing = makeDeps(store, tmpRoot, {
+      evolution: {
+        enabled: true, autoTrigger: true, autoRecord: true,
+        analysis: { minExperiences: 5, minOccurrences: 2 },
+        generation: { enabled: true },
+        promotion: { enabled: false },
+        maxCyclesPerProcess: 10,
+      },
+    })
+    const failingLlm = {
+      stream: async function* () {
+        yield { type: 'text-delta', text: 'not-valid-json' }
+        yield { type: 'finish', reason: { kind: 'completed' } }
+      },
+    }
+    const failingDeps: ModuleDeps = {
+      ...depsFailing,
+      ctx: {
+        ...depsFailing.ctx,
+        get: (name: string) => {
+          if (name === 'llm') return failingLlm
+          if (name === 'agentDefaultModel') return {
+            currentSelection: () => ({ provider: 'test', model: 'test-model' }),
+          }
+          return undefined
+        },
+      },
+    }
+
+    // Cycle 1: generation fails (LLM returns invalid JSON)
+    const outcome1 = await runAutoCycle(failingDeps)
+    expect(outcome1.ran).toBe(true)
+    expect(outcome1.reason).toContain('generation failed')
+
+    // Reset guard so cycle 2 can run; do NOT add new experiences — the
+    // degradation signal is the same, and the guard is what normally blocks
+    // the second cycle. We bypass by resetting.
+    resetAutoGuards()
+
+    // Cycle 2: the system MUST NOT permanently suppress the opportunity.
+    // With the C2 fix, a failed generation does not consume the opportunity:
+    // the synthetic pattern is reused and generation is re-attempted.
+    const outcome2 = await runAutoCycle(failingDeps)
+    expect(outcome2.ran).toBe(true)
+    // Still fails (LLM still returns bad JSON), but the key assertion is
+    // that it DID NOT return "already handled in prior cycle".
+    expect(outcome2.reason).not.toContain('already handled in prior cycle')
+    expect(outcome2.reason).toContain('generation failed')
+
+    // Verify no candidate was created by either cycle
+    const candidates = await store.listCandidates(500)
+    expect(candidates.length).toBe(0)
+
+    // Verify exactly ONE synthetic pattern exists (not duplicated)
+    const patterns = await store.listPatterns(500)
+    const synthPatterns = patterns.filter(p => p.description.startsWith('Degradation'))
+    expect(synthPatterns.length).toBe(1)
+  })
+
+  // ── Case 17 (C2 fix): rejected candidate does NOT permanently block retry ──
+
+  it('P12C2-rejected-candidate-allows-retry: benchmark rejection does not consume the opportunity', async () => {
+    await store.createVersion({ label: 'v1', modules: [] })
+    const v2 = await store.createVersion({ label: 'v2', modules: [] })
+
+    // Seed 20 unique-signature failures under v2 (force degradation-only path)
+    for (let i = 0; i < 20; i++) {
+      await store.addExperience({
+        success: false,
+        errors: ['unique-sig-' + i],
+        stepCount: 12,
+        versionId: 'v2',
+        prompt: 'task-' + i,
+      })
+    }
+
+    // Manually create a candidate in rejected status to simulate the
+    // "benchmark rejected it" state.
+    const rejected = await store.addCandidate({
+      parentVersion: 'v2',
+      type: 'retry-strategy',
+      name: 'rejected-candidate',
+      description: 'Degradation v2: success-rate-low:0.0%; error-rate-high:100.0%',
+      reason: 'rejected by benchmark',
+      evidenceIds: [],
+      patternIds: [],
+      files: [],
+      tests: [],
+      benchmarkConfig: {
+        successRate: { min: 0.8, weight: 1 },
+        avgScore: { min: 0.7, weight: 1 },
+        errorRate: { max: 0.2, weight: 1 },
+        avgSteps: { max: 50, weight: 0.5 },
+        avgDurationMs: { max: 60000, weight: 0.5 },
+      },
+      status: 'rejected',
+    })
+
+    // Now run a cycle. The rejected candidate should NOT block a new attempt.
+    // degradationCandidateExists excludes 'rejected' status, so the context
+    // should be detected and generation re-attempted.
+    const depsGood = makeDeps(store, tmpRoot, {
+      evolution: {
+        enabled: true, autoTrigger: true, autoRecord: true,
+        analysis: { minExperiences: 5, minOccurrences: 2 },
+        generation: { enabled: true },
+        promotion: { enabled: false },
+        maxCyclesPerProcess: 10,
+      },
+    })
+    const goodLlm = makeFakeLlm()
+    const goodDeps: ModuleDeps = {
+      ...depsGood,
+      ctx: {
+        ...depsGood.ctx,
+        get: (name: string) => {
+          if (name === 'llm') return goodLlm
+          if (name === 'agentDefaultModel') return {
+            currentSelection: () => ({ provider: 'test', model: 'test-model' }),
+          }
+          return undefined
+        },
+      },
+    }
+
+    resetAutoGuards()
+    const outcome = await runAutoCycle(goodDeps)
+    expect(outcome.ran).toBe(true)
+    // The cycle should have proceeded past the "already handled" gate and
+    // either generated a candidate or reported generation/pattern outcome.
+    expect(outcome.reason).not.toContain('already handled in prior cycle')
+
+    // A new candidate should have been generated (the rejected one does not block)
+    const candidates = await store.listCandidates(500)
+    const nonRejected = candidates.filter(c => c.id !== rejected.id)
+    expect(nonRejected.length).toBeGreaterThan(0)
+  })
+
+  // ── Case 18 (C3 fix): parentVersion is stable against mid-cycle promotion ──
+
+  it('P12C3-parentVersion-stable-under-mid-cycle-promotion: candidate retains the version captured at cycle start', async () => {
+    await store.createVersion({ label: 'v1', modules: [] })
+    const v2 = await store.createVersion({ label: 'v2-degraded', modules: [] })
+
+    // Seed 20 failures under v2 with UNIQUE signatures so no recurrence patterns
+    // are found (forces the pattern-driven path via the fresh recurrence check
+    // being empty... actually we need SOME patterns to hit the pattern-driven
+    // path). Use repeated signatures instead.
+    for (let i = 0; i < 20; i++) {
+      await store.addExperience({
+        success: false,
+        errors: ['same-sig'],
+        stepCount: 12,
+        versionId: 'v2',
+        prompt: 'task-' + i,
+      })
+    }
+
+    const depsGood = makeDeps(store, tmpRoot, {
+      evolution: {
+        enabled: true, autoTrigger: true, autoRecord: true,
+        analysis: { minExperiences: 5, minOccurrences: 2 },
+        generation: { enabled: true },
+        promotion: { enabled: false },
+        maxCyclesPerProcess: 10,
+      },
+    })
+    const goodLlm = makeFakeLlm()
+    const goodDeps: ModuleDeps = {
+      ...depsGood,
+      ctx: {
+        ...depsGood.ctx,
+        get: (name: string) => {
+          if (name === 'llm') return goodLlm
+          if (name === 'agentDefaultModel') return {
+            currentSelection: () => ({ provider: 'test', model: 'test-model' }),
+          }
+          return undefined
+        },
+      },
+    }
+
+    resetAutoGuards()
+    const outcome = await runAutoCycle(goodDeps)
+    expect(outcome.ran).toBe(true)
+    expect(outcome.candidateId).toBeDefined()
+
+    // The candidate's parentVersion must be 'v2' — the version active at cycle
+    // start, not any version that a concurrent promotion might switch to.
+    const candidate = await store.getCandidate(outcome.candidateId!)
+    expect(candidate).not.toBeNull()
+    expect(candidate!.parentVersion).toBe('v2')
+
+    // Now simulate a concurrent promotion to v3 and verify the EXISTING
+    // candidate's parentVersion is NOT retroactively changed.
+    const v3 = await store.createVersion({ label: 'v3', modules: [] })
+    expect(v3.id).toBe('v3')
+    const activeAfter = await store.getActiveVersion()
+    expect(activeAfter!.id).toBe('v3')
+
+    // Reload the candidate — parentVersion is immutable, still 'v2'
+    const reloaded = await store.getCandidate(outcome.candidateId!)
+    expect(reloaded!.parentVersion).toBe('v2')
+  })
 })

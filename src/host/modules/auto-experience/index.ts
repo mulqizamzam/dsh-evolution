@@ -211,6 +211,15 @@ async function ensureSyntheticPattern(deps: ModuleDeps, ctx: {
  * available. Returns a non-null outcome only when a degradation-driven
  * candidate was actually created; otherwise returns null so the caller can
  * fall through to the generic "no patterns" response.
+ *
+ * Retry semantics: `ensureSyntheticPattern` persists the synthetic pattern
+ * even when generation later fails. That is intentional — it preserves
+ * provenance. The pattern is NOT a terminal dedup marker: a failed or
+ * rejected candidate does not permanently consume the degradation
+ * opportunity. The next cycle re-attempts generation using the existing
+ * pattern; a new candidate is only created if one is not already in flight
+ * or terminal (enforced by `degradationCandidateExists` inside
+ * `detectDegradationContext`).
  */
 async function detectDegradationAndSynthesize(deps: ModuleDeps): Promise<AutoCycleOutcome | null> {
   const cfg = deps.cfg().evolution
@@ -219,15 +228,24 @@ async function detectDegradationAndSynthesize(deps: ModuleDeps): Promise<AutoCyc
 
   const genEnabled = cfg.generation.enabled
   const patternId = await ensureSyntheticPattern(deps, ctx)
-  if (patternId === null) {
-    // A candidate already exists (handled by detectDegradationContext) — or the
-    // synthetic pattern is already stored from a prior cycle without a
-    // corresponding candidate. Report but do not create another.
-    return { ran: true, reason: 'degradation detected; already handled in prior cycle', patterns: 0 }
-  }
 
   if (!genEnabled) {
-    return { ran: true, reason: 'degradation detected; generation disabled', patterns: 1, candidateId: undefined }
+    return { ran: true, reason: 'degradation detected; generation disabled', patterns: patternId !== null ? 1 : 0, candidateId: undefined }
+  }
+
+  // Resolve a pattern ID for the builder. If the synthetic pattern already
+  // exists from a prior failed attempt, reuse it; the builder still needs a
+  // valid pattern ID to anchor evidence lineage.
+  let resolvedPatternId = patternId
+  if (resolvedPatternId === null) {
+    const patterns = await deps.store.listPatterns(500)
+    const existing = patterns.find(p => p.description === ctx.description)
+    if (!existing) {
+      // Defensive: should not happen after ensureSyntheticPattern ran, but
+      // guard against a race that deleted the pattern between the two calls.
+      return { ran: true, reason: 'degradation detected; pattern not found', patterns: 0 }
+    }
+    resolvedPatternId = existing.id
   }
 
   // Delegate to the same builder pipeline as pattern-driven generation.
@@ -240,22 +258,22 @@ async function detectDegradationAndSynthesize(deps: ModuleDeps): Promise<AutoCyc
   }
 
   const built = await build.execute({
-    patternIds: [patternId],
+    patternIds: [resolvedPatternId],
     parentVersion: ctx.versionId,
   } as never, { signal: AbortSignal.timeout(180_000) }) as { ok?: boolean; candidateId?: string; error?: string }
 
   if (built?.ok !== true || typeof built.candidateId !== 'string') {
-    return { ran: true, reason: 'generation failed: ' + String(built?.error ?? 'unknown'), patterns: 1 }
+    return { ran: true, reason: 'generation failed: ' + String(built?.error ?? 'unknown'), patterns: patternId !== null ? 1 : 0 }
   }
 
   if (!cfg.promotion.enabled) {
-    return { ran: true, reason: 'candidate generated; promotion disabled', patterns: 1, candidateId: built.candidateId }
+    return { ran: true, reason: 'candidate generated; promotion disabled', patterns: patternId !== null ? 1 : 0, candidateId: built.candidateId }
   }
 
   const { promoteTools } = await import('../promote/tools.ts')
   const decision = promoteTools(deps).find(t => t.name === 'evo_promote_decision')
   if (!decision) {
-    return { ran: true, reason: 'promote module unavailable', patterns: 1 }
+    return { ran: true, reason: 'promote module unavailable', patterns: patternId !== null ? 1 : 0 }
   }
 
   const verdict = await decision.execute({ candidateId: built.candidateId } as never, { signal: AbortSignal.timeout(60_000) }) as {
@@ -264,7 +282,7 @@ async function detectDegradationAndSynthesize(deps: ModuleDeps): Promise<AutoCyc
   return {
     ran: true,
     reason: 'candidate generated and evaluated from degradation signal',
-    patterns: 1,
+    patterns: patternId !== null ? 1 : 0,
     candidateId: built.candidateId,
     verdict: verdict?.recommendation,
   }
@@ -310,6 +328,13 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
 
     guards.lastCycleExperienceCount = experiences.length
 
+    // Capture the active version once at the top of the cycle. A manual
+    // promotion/rollback that lands mid-cycle must not silently shift
+    // parentVersion to a different version.  This value is passed to every
+    // downstream builder call in this cycle.
+    const cycleActiveVersion = await deps.store.getActiveVersion()
+    const cycleParentVersion = cycleActiveVersion ? cycleActiveVersion.id : 'v0'
+
     if (fresh.length === 0) {
       // No recurrence-based patterns detected; check whether the active version
       // shows degradation and synthesize a candidate from the signal.
@@ -350,10 +375,11 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
     if (!build) return { ran: true, reason: 'builder unavailable', patterns: fresh.length }
 
     const strongest = [...fresh].sort((a, b) => b.confidence - a.confidence)[0]
-    const active = await deps.store.getActiveVersion()
+    // Use the version captured at cycle start (not a fresh read) so that a
+    // mid-cycle promotion/rollback does not shift parentVersion.
     const built = await build.execute({
       patternIds: [strongest.id],
-      parentVersion: active ? active.id : 'v0',
+      parentVersion: cycleParentVersion,
     } as never, { signal: AbortSignal.timeout(180_000) }) as { ok?: boolean; candidateId?: string; error?: string }
 
     if (built?.ok !== true || typeof built.candidateId !== 'string') {
