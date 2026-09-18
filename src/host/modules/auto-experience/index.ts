@@ -185,17 +185,41 @@ async function detectDegradationContext(
 
   const evidenceIds = records.map(r => r.id).filter((id): id is string => typeof id === 'string')
 
-  // (b) Overlap check — covers candidates created through the pattern-driven
-  //     path where the builder's patternIds point to a recurrence pattern,
-  //     not the synthetic degradation pattern.
+  // (b) Non-terminal candidate check — covers candidates created through the
+  //     pattern-driven path where the builder's patternIds point to a
+  //     recurrence pattern, not the synthetic degradation pattern.
+  //
+  // We block only when the current evidence set is a SUBSET of (or equal to)
+  // an existing non-terminal candidate's evidence set: no new evidence has
+  // arrived since that candidate was generated. If the current evidenceIds
+  // contains IDs the candidate does not have, the opportunity has materially
+  // changed and a new candidate is permitted.
   const candidates = await deps.store.listCandidates(500)
   for (const c of candidates) {
     if (c.status === 'promoted' || c.status === 'rejected') continue
     if (c.parentVersion !== signal.versionId) continue
     if (!Array.isArray(c.evidenceIds) || c.evidenceIds.length === 0) continue
-    const hasOverlap = evidenceIds.some(eid => c.evidenceIds!.includes(eid))
-    if (hasOverlap) return null
+    const candidateSet = new Set(c.evidenceIds)
+    const hasNewEvidence = evidenceIds.some(eid => !candidateSet.has(eid))
+    if (!hasNewEvidence) return null
   }
+
+  // (c) Terminal evidence-identity check — blocks re-generation when the
+  //     current evidence set has already been fully consumed by a terminal
+  //     (promoted or rejected) candidate for the same version. This prevents
+  //     unbounded candidate churn: without this, every cycle after a
+  //     rejection would generate another candidate from identical evidence.
+  //
+  // Any single experience ID not present in the terminal evidence set
+  // unblocks: materially new evidence permits a fresh candidate.
+  const terminalEvidence = new Set(
+    candidates
+      .filter(c => (c.status === 'promoted' || c.status === 'rejected')
+               && c.parentVersion === signal.versionId
+               && Array.isArray(c.evidenceIds) && c.evidenceIds.length > 0)
+      .flatMap(c => c.evidenceIds!),
+  )
+  if (evidenceIds.every(eid => terminalEvidence.has(eid))) return null
 
   return {
     versionId: signal.versionId,
