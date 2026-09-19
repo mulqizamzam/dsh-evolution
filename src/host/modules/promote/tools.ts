@@ -208,7 +208,12 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
         const activeVersion = await store.getActiveVersion()
         let activeMetrics: { successRate: number } | null = null
         if (activeVersion?.modules?.length) {
-          const activeModuleId = activeVersion.modules[0]
+          // modules[0] may be a full candidate object (test fixtures, non-normal
+          // paths); coerce to a string id for the benchmark filter below.
+          const rawId = activeVersion.modules[0]
+          const activeModuleId = (typeof rawId === 'object' && rawId !== null && 'id' in rawId)
+            ? String((rawId as { id: unknown }).id)
+            : String(rawId)
           const activeModuleBenchmarks = allBenchmarks
             .filter(b => b.candidateId === activeModuleId)
             .sort((x, y) => x.createdAt > y.createdAt ? -1 : 1)
