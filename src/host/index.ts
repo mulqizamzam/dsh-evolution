@@ -21,7 +21,11 @@ import * as activationModule from './modules/activation/index.ts'
 import * as versionHistoryModule from './modules/version-history/index.ts'
 
 export const name = 'dsh-evolution'
-export const VERSION = '0.1.0'
+
+/** Read the package version from package.json at the repo root. */
+import { createRequire } from 'node:module'
+const pkgVersion = createRequire(import.meta.url)('../../package.json').version
+export const VERSION = pkgVersion
 export const inject = ['tools', 'settings', 'agents']
 
 export interface EvoModule {

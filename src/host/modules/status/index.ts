@@ -3,6 +3,7 @@ import type { ToolDefinition, HostContextShape } from '../../dsh.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
 import type { ModuleDeps } from '../../types.ts'
 import type { EvolutionStore } from '../../store.ts'
+import { VERSION } from '../../index.ts'
 
 type Args = Record<string, unknown>
 interface Execution { signal: AbortSignal; agent?: unknown }
@@ -45,7 +46,7 @@ function statusTool(store: EvolutionStore, version: string): ToolDefinition {
 }
 
 export function apply(deps: ModuleDeps): void {
-  const def = statusTool(deps.store, '0.1.0')
+  const def = statusTool(deps.store, VERSION)
   const result = registerToolSafe(deps.ctx, def)
   if (!result.ok) deps.warn(`status: tool registration failed: ${result.error}`)
   deps.log('status: registered 1 tool')
