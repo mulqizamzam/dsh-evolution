@@ -22,10 +22,12 @@ import * as versionHistoryModule from './modules/version-history/index.ts'
 
 export const name = 'dsh-evolution'
 
-/** Read the package version from package.json at the repo root. */
-import { createRequire } from 'node:module'
-const pkgVersion = createRequire(import.meta.url)('../../package.json').version
-export const VERSION = pkgVersion
+/**
+ * Plugin version — read at build time by tsdown from package.json.
+ * Do NOT import package.json directly: the bundled lib/ must not depend
+ * on the source-tree layout at runtime (see the createRequire bug report).
+ */
+export const VERSION = typeof PKG_VERSION !== 'undefined' ? PKG_VERSION : '0.1.0'
 export const inject = ['tools', 'settings', 'agents']
 
 export interface EvoModule {
