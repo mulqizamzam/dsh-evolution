@@ -43,6 +43,7 @@ export function apply(deps: ModuleDeps): void {
     parameters: { type: 'object', properties: {}, required: [] },
     output: { schema: JSON_OBJECT_OUTPUT, render: RENDER },
     execute: async () => {
+      await refreshActivation(deps)
       const root = deps.store.getRoot()
       const active = await deps.store.getActiveVersion()
       const state = activationState()

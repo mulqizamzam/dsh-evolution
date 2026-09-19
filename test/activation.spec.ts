@@ -239,4 +239,65 @@ describe('candidate -> plugin activation', () => {
     const status = await freshHost.call('evo_activation_status') as { reason: string | null }
     expect(String(status.reason)).toContain('not loadable')
   })
+
+  /**
+   * Regression: status must not report a mounted version when the artifact
+   * was corrupted AFTER the initial mount.  The pre-fix code read the
+   * cached activationState() without refreshing, so it reported "v2 mounted"
+   * even after the plugin.js was deleted.
+   */
+  it('status re-validates before reporting (stale-state regression)', async () => {
+    const candidate = await seedBenchmarkedCandidate(store, GOOD_ENTRY)
+    const host = makeFakeHost()
+    await bootPlugin(host, root)
+    const deps = depsFor(host, store, root)
+    const { promoteTools } = await import('../src/host/modules/promote/tools.ts')
+    const promoted = await promoteTools(deps).find(t => t.name === 'evo_promote')!
+      .execute({ candidateId: candidate.id, reason: 'r' } as never, { signal: AbortSignal.timeout(120_000) }) as { version: { id: string } }
+    expect(promoted.version.id).toBe('v2')
+
+    // Sanity: status shows v2 mounted before corruption.
+    let status = await host.call('evo_activation_status') as {
+      mountedVersionId: string | null; mountedTool: string | null
+    }
+    expect(status.mountedVersionId).toBe('v2')
+    expect(status.mountedTool).toBe('evo_active_verify_before_edit')
+
+    // Now corrupt the artifact on disk (as an external process would).
+    await writeFile(join(root, 'versions', 'v2', 'plugin.js'), 'this is not valid (((\n', 'utf8')
+
+    // Status must reflect the corruption: it calls refreshActivation() first.
+    status = await host.call('evo_activation_status') as {
+      mountedVersionId: string | null; mountedTool: string | null; reason: string | null
+    }
+    expect(status.mountedTool).toBe(null)
+    expect(status.reason).toContain('pre-flight refused')
+
+    // Active version in the store is still v2 (rollback was NOT performed).
+    const activeInStore = await store.getActiveVersion()
+    expect(activeInStore!.id).toBe('v2')
+  })
+
+  /**
+   * Invariant: calling evo_activation_status must not promote or rollback
+   * any version.
+   */
+  it('status does not mutate active version', async () => {
+    const candidate = await seedBenchmarkedCandidate(store, GOOD_ENTRY)
+    const host = makeFakeHost()
+    await bootPlugin(host, root)
+    const deps = depsFor(host, store, root)
+    const { promoteTools } = await import('../src/host/modules/promote/tools.ts')
+    await promoteTools(deps).find(t => t.name === 'evo_promote')!
+      .execute({ candidateId: candidate.id, reason: 'r' } as never, { signal: AbortSignal.timeout(120_000) })
+
+    const before = await store.listVersions()
+    // Call status three times (idempotent re-validation)
+    await host.call('evo_activation_status')
+    await host.call('evo_activation_status')
+    await host.call('evo_activation_status')
+    const after = await store.listVersions()
+    expect(after).toEqual(before)
+    expect((await store.getActiveVersion())!.id).toBe('v2')
+  })
 })
