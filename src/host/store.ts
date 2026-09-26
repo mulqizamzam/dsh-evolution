@@ -308,12 +308,15 @@ export class EvolutionStore {
       modules: data.modules,
       activeMetrics: data.activeMetrics,
     }
-    // Capture the previous active version BEFORE any writes.  We read it from
-    // the list rather than from getActiveVersion() to avoid the new canonical
-    // pointer being seen mid-flight.
+    // Capture the previous active version BEFORE any writes.  Resolve from the
+    // canonical pointer (not status metadata) so that createVersion() and
+    // getActiveVersion() cannot diverge when pointer/status are out of sync.
     // Only mark a version rolled-back if one was genuinely active; a historical
     // (rolled-back) record must not be silently re-selected by ordering.
-    const oldActive = versions.find(v => v.status === 'active') ?? null
+    const pointer = await readJsonSafe(this.activePointerPath()) as { versionId: string } | null
+    const oldActive = pointer && typeof pointer.versionId === 'string'
+      ? versions.find(v => v.id === pointer.versionId) ?? null
+      : null
     // Write the new version record FIRST (survives a mid-write crash).
     await writeJsonAtomic(join(this.versionDir(), `${version.id}.json`), version)
     // Commit the canonical active pointer — this is the single authority.
