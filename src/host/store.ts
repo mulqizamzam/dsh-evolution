@@ -2,13 +2,50 @@ import { join } from 'node:path'
 import { ensureDir, ensureStateRoot, resolveStateRoot } from '../lib/home.ts'
 import type { ContextGet } from '../lib/home.ts'
 import { readJsonSafe, writeJsonAtomic, writeJsonFile, listDir, removeFile } from '../lib/fsx.ts'
-import { newId, isoDateTime, versionId } from '../lib/ids.ts'
+import { newId, isoDateTime, versionId, isSafeKey } from '../lib/ids.ts'
 import type {
   ExperienceRecord, Pattern, CandidateModule, BenchmarkRun, Version,
 } from './types.ts'
 
 /** Path to the single canonical active-version pointer file. */
 export const ACTIVE_VERSION_POINTER = 'active-version.json'
+
+/**
+ * Shape of the active-version pointer file on disk.
+ *
+ * `generation` is an optimistic-concurrency token that is incremented on
+ * every pointer mutation (createVersion, rollbackVersion, bootstrap repair).
+ * Before a mutation completes, the calling method re-reads the pointer and
+ * compares its generation against the value observed at the start of the
+ * operation.  A mismatch (another operation bumped it in the meantime)
+ * causes the mutation to abort and report a conflict rather than silently
+ * overwriting the winner's pointer.
+ *
+ * Legacy pointer files without a `generation` field are treated as
+ * generation 0, so state roots created before M3.4 remain readable.
+ */
+export interface ActivePointer {
+  versionId: string
+  generation: number
+}
+
+/** Read the active pointer, normalising legacy (generation-free) files. */
+async function readActivePointerSafe(path: string): Promise<ActivePointer | null> {
+  const raw = (await readJsonSafe(path)) as { versionId?: unknown; generation?: unknown } | null
+  if (!raw || typeof raw.versionId !== 'string' || raw.versionId === '') return null
+  // Legacy pointer without generation field → treat as generation 0.
+  const generation = typeof raw.generation === 'number' ? raw.generation : 0
+  return { versionId: raw.versionId, generation }
+}
+
+/**
+ * Result of an optimistic-concurrency check.  `ok: true` means the pointer
+ * is unchanged since the observed generation; `ok: false` carries the
+ * description of the conflict for the caller to surface.
+ */
+export type PointerConflictResult =
+  | { ok: true }
+  | { ok: false; error: string }
 
 export interface StoreOptions {
   get?: ContextGet
@@ -45,13 +82,16 @@ export class EvolutionStore {
     // Case 3 (multiple active): throw — ambiguous legacy state must not be
     //   silently resolved; operator must repair.
     try {
-      const pointer = await readJsonSafe(this.activePointerPath()) as { versionId: string } | null
-      if (pointer && typeof pointer.versionId === 'string' && pointer.versionId !== '') return this.root
+      const pointer = await readActivePointerSafe(this.activePointerPath())
+      if (pointer) return this.root
     } catch { /* missing — proceed to bootstrap */ }
     const versions = await this.listVersions()
     const activeVersions = versions.filter(v => v.status === 'active')
     if (activeVersions.length === 1) {
-      await writeJsonAtomic(this.activePointerPath(), { versionId: activeVersions[0]!.id })
+      await writeJsonAtomic(this.activePointerPath(), {
+        versionId: activeVersions[0]!.id,
+        generation: 1,
+      } satisfies ActivePointer)
     } else if (activeVersions.length > 1) {
       throw new Error(
         'ambiguous legacy state at init: ' + activeVersions.map(v => v.id).join(', ')
@@ -80,6 +120,9 @@ export class EvolutionStore {
   }
 
   async getExperience(id: string): Promise<ExperienceRecord | null> {
+    // id can originate from persisted evidence references (tamperable state);
+    // it becomes a path component, so refuse anything that is not a safe key.
+    if (!isSafeKey(id)) return null
     return (await readJsonSafe(join(this.experienceDir(), `${id}.json`))) as ExperienceRecord | null
   }
 
@@ -106,14 +149,19 @@ export class EvolutionStore {
   async pruneExperiences(maxRecords: number, retentionDays: number): Promise<number> {
     // Read ALL experience files (no limit here — we need the full set to prune correctly)
     const allFiles = await listDir(this.experienceDir(), 100000)
-    const records: Array<{ id: string; timestamp: string }> = []
+    // `file` is the readdir-derived name (a single directory-entry component,
+    // inherently confined to this directory). Deletion uses `file`, NEVER the
+    // record's `id` FIELD: the record content is persisted state that may have
+    // been tampered with, and a crafted id like `../../x` must not be able to
+    // direct a delete outside the experiences directory.
+    const records: Array<{ id: string; timestamp: string; file: string }> = []
     for (const f of allFiles) {
       if (!f.endsWith('.json')) continue
       const data = await readJsonSafe(join(this.experienceDir(), f))
       if (data && typeof data === 'object' && 'timestamp' in (data as Record<string, unknown>)) {
         const rec = data as { id: string; timestamp: string }
         if (typeof rec.id === 'string' && typeof rec.timestamp === 'string') {
-          records.push(rec)
+          records.push({ id: rec.id, timestamp: rec.timestamp, file: f })
         }
       }
     }
@@ -122,15 +170,24 @@ export class EvolutionStore {
     const ttlMs = retentionDays * 24 * 60 * 60 * 1000
     const cutoff = now - ttlMs
 
-    // Sort by timestamp ascending (oldest first) for deterministic pruning
-    records.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    // Sort by timestamp ascending (oldest first) for deterministic pruning.
+    // Secondary sort by id breaks ties when two records share an identical
+    // timestamp — without this, the order depends on the original input
+    // array (which is listDir's mtime-descending enumeration), making pruning
+    // non-deterministic across runs with the same logical data.
+    // id is a 12-char hex string from randomBytes(6), so lexicographic order
+    // is a stable total order over the id space.
+    records.sort((a, b) => {
+      const t = a.timestamp.localeCompare(b.timestamp)
+      return t !== 0 ? t : a.id.localeCompare(b.id)
+    })
 
     let removed = 0
     // Phase 1: remove expired records (TTL)
     for (const r of records) {
       const ts = new Date(r.timestamp).getTime()
       if (ts < cutoff) {
-        await removeFile(join(this.experienceDir(), `${r.id}.json`))
+        await removeFile(join(this.experienceDir(), r.file))
         removed++
       }
     }
@@ -140,7 +197,7 @@ export class EvolutionStore {
     if (nonExpired.length > maxRecords) {
       const toRemove = nonExpired.slice(0, nonExpired.length - maxRecords)
       for (const r of toRemove) {
-        await removeFile(join(this.experienceDir(), `${r.id}.json`))
+        await removeFile(join(this.experienceDir(), r.file))
         removed++
       }
     }
@@ -199,10 +256,15 @@ export class EvolutionStore {
   }
 
   async getCandidate(id: string): Promise<CandidateModule | null> {
+    // candidateId reaches this from tool arguments and from persisted records
+    // (benchmarks, versions) that may have been tampered with; it becomes a
+    // path component under candidates/, so an unsafe key must never be joined.
+    if (!isSafeKey(id)) return null
     return (await readJsonSafe(join(this.candidateDir(), `${id}.json`))) as CandidateModule | null
   }
 
   async updateCandidate(id: string, updates: Partial<CandidateModule>): Promise<CandidateModule | null> {
+    if (!isSafeKey(id)) return null
     const existing = await this.getCandidate(id)
     if (!existing) return null
     const updated = { ...existing, ...updates, id, updatedAt: isoDateTime(this.nowFn()) }
@@ -251,21 +313,56 @@ export class EvolutionStore {
   private versionDir(): string { return join(this.root, 'versions') }
 
   async getVersion(id: string): Promise<Version | null> {
+    if (!isSafeKey(id)) return null
     return (await readJsonSafe(join(this.versionDir(), `${id}.json`))) as Version | null
   }
 
   /**
    * The single canonical persisted active-version pointer file.
-   * Stores `{ versionId: "v2" }` — the authoritative answer to "which version
-   * is active?". When the file is missing (fresh state root, or legacy data),
+   * Stores `{ versionId, generation }` — the authoritative answer to
+   * "which version is active?" and "how many times has the pointer been
+   * mutated?".  When the file is missing (fresh state root, or legacy data),
    * this falls back to scanning version records for status='active'.
    */
   private activePointerPath(): string { return join(this.root, ACTIVE_VERSION_POINTER) }
 
+  /**
+   * Read the current active-version pointer, returning both the version and
+   * the generation token.  Used by `createVersion` and `rollbackVersion` to
+   * implement optimistic concurrency: the caller passes the observed
+   * generation back when committing, and the store rejects the commit if
+   * the pointer has been mutated by a concurrent operation in the meantime.
+   */
+  async readPointer(): Promise<ActivePointer | null> {
+    return readActivePointerSafe(this.activePointerPath())
+  }
+
+  /**
+   * Check whether the pointer has been mutated since the given observed
+   * generation.  Returns `{ ok: true }` when unchanged (generation matches
+   * or the pointer is absent), and a conflict error otherwise.
+   */
+  async checkPointerUnchanged(observedGeneration: number): Promise<PointerConflictResult> {
+    const current = await readActivePointerSafe(this.activePointerPath())
+    if (current === null) {
+      // Pointer was deleted or never created; legacy state.  Only safe when
+      // the observed generation was also 0 (no prior pointer).
+      if (observedGeneration === 0) return { ok: true }
+      return { ok: false, error: `active pointer deleted unexpectedly (observed generation ${observedGeneration}, now absent)` }
+    }
+    if (current.generation !== observedGeneration) {
+      return {
+        ok: false,
+        error: `active pointer changed concurrently: observed generation ${observedGeneration}, now ${current.generation} (points to ${current.versionId}); aborting to prevent stale overwrite`,
+      }
+    }
+    return { ok: true }
+  }
+
   async getActiveVersion(): Promise<Version | null> {
     // ── Canonical path: read the explicit pointer ──
-    const pointer = (await readJsonSafe(this.activePointerPath())) as { versionId: string } | null
-    if (pointer && typeof pointer.versionId === 'string' && pointer.versionId !== '') {
+    const pointer = await readActivePointerSafe(this.activePointerPath())
+    if (pointer) {
       const candidate = await this.getVersion(pointer.versionId)
       if (candidate) return candidate
       // Pointer references a version that no longer exists on disk — fall
@@ -277,7 +374,12 @@ export class EvolutionStore {
     if (activeVersions.length === 1) {
       // Unambiguous: repair the pointer atomically so subsequent reads use
       // the canonical path instead of re-scanning.
-      await writeJsonAtomic(this.activePointerPath(), { versionId: activeVersions[0]!.id })
+      const currentPointer = await readActivePointerSafe(this.activePointerPath())
+      const newGeneration = (currentPointer?.generation ?? 0) + 1
+      await writeJsonAtomic(this.activePointerPath(), {
+        versionId: activeVersions[0]!.id,
+        generation: newGeneration,
+      } satisfies ActivePointer)
       return activeVersions[0]
     }
     if (activeVersions.length > 1) {
@@ -313,14 +415,31 @@ export class EvolutionStore {
     // getActiveVersion() cannot diverge when pointer/status are out of sync.
     // Only mark a version rolled-back if one was genuinely active; a historical
     // (rolled-back) record must not be silently re-selected by ordering.
-    const pointer = await readJsonSafe(this.activePointerPath()) as { versionId: string } | null
-    const oldActive = pointer && typeof pointer.versionId === 'string'
-      ? versions.find(v => v.id === pointer.versionId) ?? null
+    const pointerBefore = await readActivePointerSafe(this.activePointerPath())
+    const observedGeneration = pointerBefore?.generation ?? 0
+    const oldActive = pointerBefore
+      ? versions.find(v => v.id === pointerBefore.versionId) ?? null
       : null
+    // The record's `id` FIELD is persisted state and can be tampered with; it
+    // becomes a path component below, so refuse to write through it.
+    if (oldActive && !isSafeKey(oldActive.id)) {
+      throw new Error('corrupted active version record has an unsafe id: ' + JSON.stringify(String(oldActive.id)))
+    }
     // Write the new version record FIRST (survives a mid-write crash).
     await writeJsonAtomic(join(this.versionDir(), `${version.id}.json`), version)
+    // Before committing the pointer, verify no concurrent mutation happened.
+    const check = await this.checkPointerUnchanged(observedGeneration)
+    if (!check.ok) {
+      // Undo the version record we just wrote to keep state consistent.
+      await removeFile(join(this.versionDir(), `${version.id}.json`))
+      throw new Error('concurrent promotion/rollback conflict: ' + check.error)
+    }
     // Commit the canonical active pointer — this is the single authority.
-    await writeJsonAtomic(this.activePointerPath(), { versionId: version.id })
+    // Bump the generation so future concurrent operations detect this write.
+    await writeJsonAtomic(this.activePointerPath(), {
+      versionId: version.id,
+      generation: observedGeneration + 1,
+    } satisfies ActivePointer)
     // Mark the previous active version as rolled-back (historical record only).
     if (oldActive && oldActive.id !== version.id) {
       await writeJsonAtomic(join(this.versionDir(), `${oldActive.id}.json`), { ...oldActive, status: 'rolled-back' })
@@ -340,10 +459,37 @@ export class EvolutionStore {
   }
 
   async rollbackVersion(versionId: string): Promise<{ restored: Version; deactivated: Version | null; alreadyActive: boolean } | null> {
+    if (!isSafeKey(versionId)) return null
     const target = await this.getVersion(versionId)
     if (!target) return null
-    const active = await this.getActiveVersion()
+    // target/active are persisted records whose `id` field becomes a path
+    // component below; a tampered field must not direct the write.
+    if (!isSafeKey(target.id)) return null
+
+    // Read the pointer to get the observed generation before any writes.
+    const pointerBefore = await readActivePointerSafe(this.activePointerPath())
+    const observedGeneration = pointerBefore?.generation ?? 0
+
+    // Resolve active from the pointer directly (fast path) or fall back to
+    // version scan (legacy state).  We deliberately do NOT call getActiveVersion()
+    // here because that method may repair the pointer, which would bump the
+    // generation and invalidate observedGeneration.
+    const activeVersion: Version | null = pointerBefore
+      ? await this.getVersion(pointerBefore.versionId)
+      : await this.getActiveVersion()
+    const active = activeVersion ?? null
+
+    if (active && !isSafeKey(active.id)) {
+      throw new Error('corrupted active version record has an unsafe id: ' + JSON.stringify(String(active.id)))
+    }
     if (active?.id === target.id) return { restored: target, deactivated: null, alreadyActive: true }
+
+    // Verify the pointer has not been mutated by a concurrent operation.
+    const check = await this.checkPointerUnchanged(observedGeneration)
+    if (!check.ok) {
+      throw new Error('concurrent promotion/rollback conflict: ' + check.error)
+    }
+
     if (active) {
       // Mark old active as rolled-back (historical record only).
       await writeJsonAtomic(join(this.versionDir(), `${active.id}.json`), { ...active, status: 'rolled-back' })
@@ -351,11 +497,15 @@ export class EvolutionStore {
     // Mark target as active (historical record only — kept for query compatibility).
     await writeJsonAtomic(join(this.versionDir(), `${target.id}.json`), { ...target, status: 'active' })
     // Commit the canonical active pointer — the single authority.
-    await writeJsonAtomic(this.activePointerPath(), { versionId: target.id })
+    await writeJsonAtomic(this.activePointerPath(), {
+      versionId: target.id,
+      generation: observedGeneration + 1,
+    } satisfies ActivePointer)
     return { restored: target, deactivated: active, alreadyActive: false }
   }
 
   private async updateVersion(id: string, updates: Partial<Version>): Promise<Version | null> {
+    if (!isSafeKey(id)) return null
     const existing = await this.getVersion(id)
     if (!existing) return null
     const updated = { ...existing, ...updates }
