@@ -3,12 +3,79 @@ import type { BenchmarkConfig, BenchmarkExecutionResult, BenchmarkMetrics, Modul
 import { DEFAULT_PROMOTION_POLICY } from '../../types.ts'
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
+import { containPath } from '../../../lib/contain.ts'
 import { classifyOutcome, evaluateExpectedOutput } from './outcome.ts'
 import { getSandbox } from '../sandbox/index.ts'
-import { mkdtemp, rm, mkdir, writeFile, access } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdtemp, rm, mkdir, writeFile, access, lstat, realpath } from 'node:fs/promises'
+import { join, resolve, relative, isAbsolute, sep, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
-import { dirname } from 'node:path'
+
+/**
+ * Constrain a benchmark `cwd` input so it cannot escape the temp directory
+ * created by this benchmark run.
+ *
+ * The benchmark root (`tmpDir`) is what gets bind-mounted into the sandbox;
+ * every `cwd` value must resolve to a directory that sits strictly inside
+ * (or equal to) that root.  We reuse the lexical proof from `containPath`
+ * (resolve + relative + ".."-check) rather than a string-prefix comparison.
+ *
+ * Unlike `containPath` (which rejects the root itself — it is for files),
+ * the root directory is a valid `cwd`: `resolve(base, '.') === base` and
+ * `resolve(base, '')` returns `base`, both of which must be allowed.
+ *
+ * Symlink defense (HIGH-severity finding, Argus/BadSector):
+ *   After the lexical check passes, the target is stat()-checked.  If it is
+ *   a symlink, it is resolved to its real filesystem target via lstat+readlink,
+ *   and containment is re-checked against the real target.  This mirrors the
+ *   existing pattern in `readArtifactFile` (loader.ts:340–353) and closes the
+ *   TOCTOU symlink-follow vector on the benchmark tmpDir.
+ *
+ * @param tmpDir   the mkdtemp'd benchmark root
+ * @param cwdInput the caller-supplied `cwd` string (or undefined/empty → default)
+ * @returns the resolved absolute path when contained, `null` when it would
+ *          resolve outside `tmpDir` or when the input is malformed.
+ */
+async function containBenchmarkCwd(tmpDir: string, cwdInput: unknown): Promise<string | null> {
+  // undefined / empty / "." / "." + trailing separators all mean "use the root".
+  if (cwdInput === undefined || cwdInput === '' || cwdInput === '.' || cwdInput === './') {
+    return resolve(tmpDir)
+  }
+  if (typeof cwdInput !== 'string') return null
+  if (cwdInput.includes('\0')) return null
+
+  const base = resolve(tmpDir)
+  const target = resolve(base, cwdInput)
+
+  // target === base is a valid cwd (equivalent to ".").
+  if (target === base) return base
+
+  // Directory-boundary proof via relative() — the same rule used by
+  // containPath for files.  A relative path that is ".." or starts with
+  // "../" (i.e. walks outside `base`) is rejected.
+  const rel = relative(base, target)
+  if (rel === '' || isAbsolute(rel)) return null
+  if (rel === '..' || rel.startsWith('..' + sep)) return null
+
+  // Symlink defense: if the lexical path points to a symlink, resolve its
+  // real filesystem target and re-check containment.  This follows the same
+  // pattern as readArtifactFile (loader.ts:340–353).
+  try {
+    const st = await lstat(target)
+    if (st.isSymbolicLink()) {
+      const realTarget = await realpath(target).catch(() => target) // fall back to lexical if realpath fails
+      const realRel = relative(base, realTarget)
+      if (realRel === '' || isAbsolute(realRel)) return null
+      if (realRel === '..' || realRel.startsWith('..' + sep)) return null
+      return realTarget
+    }
+  } catch {
+    // Target does not exist yet (e.g. cwd="subdir" where subdir hasn't been
+    // created by writeCandidateFiles yet) — lexical check is sufficient.
+    // The directory will be created by the sandbox binding; no further check needed.
+  }
+
+  return target
+}
 
 const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'text'; text: string }> => text(value)
 
@@ -62,13 +129,23 @@ function metricsFromResults(results: BenchmarkExecutionResult[]): BenchmarkMetri
 
 /** Write candidate files (and tests) to a directory. Returns number of files written. */
 async function writeCandidateFiles(candidateDir: string, files: Array<{ path: string; content: string }>, tests: Array<{ path: string; content: string }>): Promise<number> {
-  let count = 0
   const all = [...files, ...tests]
+  // Resolve every target through the shared containment rule BEFORE any write:
+  // candidate-controlled paths must stay inside the directory this benchmark
+  // run owns, and a rejected path must not produce a partial outside write.
+  const targets: Array<{ target: string; content: string }> = []
   for (const f of all) {
-    const filePath = join(candidateDir, f.path)
-    const dir = dirname(filePath)
+    const target = containPath(candidateDir, f.path)
+    if (target === null) {
+      throw new Error('candidate path escapes the benchmark directory: ' + String(f.path))
+    }
+    targets.push({ target, content: f.content })
+  }
+  let count = 0
+  for (const { target, content } of targets) {
+    const dir = dirname(target)
     await mkdir(dir, { recursive: true })
-    await writeFile(filePath, f.content, 'utf8')
+    await writeFile(target, content, 'utf8')
     count++
   }
   return count
@@ -222,7 +299,11 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             return neutralizeDeep({ ok: false, error: 'candidate has no files to execute' })
           }
 
-          const execCwd = typeof a.cwd === 'string' && a.cwd ? join(tmpDir, a.cwd) : tmpDir
+          const cwdInput = typeof a.cwd === 'string' ? a.cwd : ''
+          const execCwd = await containBenchmarkCwd(tmpDir, cwdInput)
+          if (execCwd === null) {
+            return neutralizeDeep({ ok: false, error: 'cwd escapes the benchmark directory: ' + cwdInput })
+          }
 
           const result = await sandbox.exec(command, {
             cwd: execCwd,
@@ -347,6 +428,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             description:
               'The operator-owned expected stdout content (exact string or /regex/ literal). When provided, stdout is evaluated against it for both sides. Supersedes exit-code-only classification. Candidate-generated metadata is never read.',
           },
+          cwd: { type: 'string', description: 'Optional override for the working directory inside the temp dir. Defaults to the temp dir root.' },
         },
         required: ['candidateId', 'command'],
       },
@@ -360,6 +442,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
         const allowNetwork = typeof a.allowNetwork === 'boolean' ? a.allowNetwork : false
         const expectedExitCode = typeof a.expectedExitCode === 'number' ? a.expectedExitCode : undefined
         const expectedOutput = typeof a.expectedOutput === 'string' ? a.expectedOutput : undefined
+        const cwdInput = typeof a.cwd === 'string' ? a.cwd : ''
 
         if (!candidateId || !command) {
           return neutralizeDeep({ ok: false, error: 'candidateId and command are required' })
@@ -381,10 +464,15 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
 
         // Helper: run one side N times
         async function runSide(sideLabel: string, dir: string, runs: number): Promise<BenchmarkExecutionResult[]> {
+          // Apply cwd containment to each side's temp dir.
+          const sideCwd = await containBenchmarkCwd(dir, cwdInput)
+          if (sideCwd === null) {
+            throw new Error('cwd escapes the benchmark directory: ' + cwdInput)
+          }
           const results: BenchmarkExecutionResult[] = []
           for (let i = 0; i < runs; i++) {
             const execResult = await sandbox.exec(command, {
-              cwd: dir,
+              cwd: sideCwd,
               timeoutMs,
               allowNetwork,
             })
