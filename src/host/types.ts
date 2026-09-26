@@ -104,6 +104,17 @@ export interface BenchmarkRun {
    * classification when both are provided.
    */
   expectedOutput?: string
+  /**
+   * Provenance seal for live benchmarks. A SHA-256 hex digest derived from
+   * (candidateId, version, command, createdAt).  Used at the promotion
+   * boundary to detect persisted tampering of a live benchmark record — a
+   * tampered record will have a seal that does not match its fields and is
+   * rejected even if mode === 'live'.
+   *
+   * Absent for simulated benchmarks and for records written before this
+   * field was introduced.
+   */
+  provenance?: string
   /** Baseline side metrics for an A/B run. */
   baselineMetrics?: BenchmarkMetrics
   /** Comparative deltas for an A/B run. */

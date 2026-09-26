@@ -5,6 +5,7 @@ import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
 import { containPath } from '../../../lib/contain.ts'
 import { classifyOutcome, evaluateExpectedOutput } from './outcome.ts'
+import { createLiveProvenance } from '../../../lib/provenance.ts'
 import { getSandbox } from '../sandbox/index.ts'
 import { mkdtemp, rm, mkdir, writeFile, access, lstat, realpath } from 'node:fs/promises'
 import { join, resolve, relative, isAbsolute, sep, dirname } from 'node:path'
@@ -362,6 +363,10 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             avgSteps: 0,
             avgDurationMs: result.durationMs,
           }
+          // Compute provenance seal: deterministic fingerprint of the live execution.
+          // This makes a forged mode='live' record detectable at the promotion boundary.
+          const createdAt = new Date().toISOString()
+          const provenance = createLiveProvenance(candidateId, candidate.parentVersion, command, createdAt)
           const record = await store.addBenchmark({
             mode: 'live',
             candidateId,
@@ -374,6 +379,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             command: clampText(command, 500),
             expectedExitCode,
             expectedOutput,
+            provenance,
             passed: outcome === 'task-successful',
             details: clampText(
               'live sandbox execution (' + sandbox.name + '): exit ' + String(result.exitCode)
@@ -614,6 +620,8 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             createdAt: new Date().toISOString(),
           }
 
+          // Provenance seal for the A/B live benchmark record.
+          const abRecordCreatedAt = new Date().toISOString()
           const abRecord = await store.addBenchmark({
             mode: 'live',
             candidateId,
@@ -629,6 +637,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             command: clampText(command, 500),
             expectedExitCode,
             expectedOutput,
+            provenance: createLiveProvenance(candidateId, candidate.parentVersion, command, abRecordCreatedAt) ?? undefined,
             passed,
             details: clampText(details, 500),
           })

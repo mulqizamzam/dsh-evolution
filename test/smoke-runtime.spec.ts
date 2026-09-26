@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { isoDateTime } from '../src/lib/ids.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
 import type { HostContextShape } from '../src/host/dsh.ts'
 import { NodeProcessSandbox } from '../src/host/modules/sandbox/index.ts'
@@ -156,6 +158,9 @@ describe('Runtime smoke test', () => {
       candidateId, version: 'v1', baseline: 'v1', runs: 3,
       metrics: { successRate: 0.95, avgScore: 0.9, errorRate: 0.05, avgSteps: 4, avgDurationMs: 8000 },
       passed: true, details: 'All thresholds met.',
+      mode: 'live',
+      command: 'echo "LIVE-PASS"',
+      provenance: createLiveProvenance(candidateId, 'v1', 'echo "LIVE-PASS"', isoDateTime(new Date())),
     })
     await store.updateCandidate(candidateId, { status: 'benchmarked' })
 

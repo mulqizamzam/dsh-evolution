@@ -3,8 +3,7 @@ import type { ModuleDeps, ToolDefinition } from '../../types.ts'
 import { DEFAULT_PROMOTION_POLICY } from '../../types.ts'
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
-import { runPromotionPolicy } from './index.ts'
-
+import { evaluatePromotionPolicy, executePromotion } from './index.ts'
 const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'text'; text: string }> => text(value)
 
 export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
@@ -31,17 +30,39 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
         if (candidate.status !== 'benchmarked') {
           return neutralizeDeep({ ok: false, error: 'candidate ' + candidateId + ' is ' + candidate.status + '; must be benchmarked before promotion' })
         }
-        // Promotion must produce a deterministic, loadable artifact. Build and
-        // validate it BEFORE creating the version, so a candidate that cannot
-        // activate never becomes the active version.
-        const { materializeArtifact, validateArtifact } = await import('../activation/artifact.ts')
-        const { activateVersion, refreshActivation, activationState } = await import('../activation/loader.ts')
+        // Verify evidence trust boundary: candidate's latest benchmark must be live.
+        // Simulated evidence cannot promote — this closes the trust boundary gap.
+        const allBenchmarks = await store.listBenchmarks(500)
+        const candidateBenchmarks = allBenchmarks
+          .filter(b => b.candidateId === candidateId)
+          .sort((a, b) => a.createdAt > b.createdAt ? -1 : 1)
+        const latestEvidence = candidateBenchmarks[0]
+        if (!latestEvidence || latestEvidence.mode !== 'live') {
+          return neutralizeDeep({
+            ok: false,
+            error: 'candidate has no live benchmark evidence; run evo_benchmark_live or evo_benchmark_ab before promoting (simulated evidence cannot promote)',
+          })
+        }
+        // ── Step 1: Policy evaluation (pure read, no state mutation) ──
+        // This is the authoritative beats_active gate. If it fails, NO version
+        // record is created, NO artifact is materialized, and NO activation
+        // state changes. The currently active version/tool remains untouched.
+        const policyResult = await evaluatePromotionPolicy(deps, candidate)
+        if (!policyResult.ok) {
+          return neutralizeDeep({ ok: false, error: policyResult.error })
+        }
 
-        // The version id is decided by the store; materialize under a probe id
-        // first, then rewrite under the real id once it is known.
+        // ── Step 2: Compute the version id that executePromotion will create ──
         const versionNumber = (await store.listVersions(200)).reduce((max, v) => Math.max(max, v.number), 0) + 1
         const plannedVersionId = 'v' + String(versionNumber)
 
+        // ── Step 3: Pre-flight (static validation + sandbox execution) BEFORE
+        //           any store mutation. A broken candidate must NOT create a
+        //           Version record or change activation state. ──
+        const { materializeArtifact, validateArtifact } = await import('../activation/artifact.ts')
+        const { activateVersion, activationState } = await import('../activation/loader.ts')
+
+        // Materialize under the planned id first (pre-flight needs the artifact).
         let manifest: { toolName: string } | null = null
         try {
           manifest = await materializeArtifact(store.getRoot(), {
@@ -61,8 +82,8 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           return neutralizeDeep({ ok: false, error: 'version artifact did not validate', errors: validation.errors })
         }
 
-        // Pre-flight executes the candidate in the sandbox: an incompatible or
-        // broken candidate is refused here, before any state changes.
+        // Run pre-flight (sandbox syntax check + test command).
+        // If this fails, the candidate is rejected — no Version is created.
         const probe = await activateVersion(deps, plannedVersionId)
         if (probe === null) {
           return neutralizeDeep({
@@ -72,20 +93,16 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           })
         }
 
-        // Delegate version creation to the shared promotion authority.
-        // The comparative beats_active gate is enforced inside
-        // runPromotionPolicy at the final mutation boundary, so even a
-        // candidate that passed the sandbox pre-flight here is still
-        // rejected if its success rate is not greater than the active
-        // version's. This mirrors the autonomous path: evo_full_cycle
-        // (no sandbox pre-flight) and evo_promote (with sandbox
-        // pre-flight) both reach the same boundary and are protected
-        // by the same policy.
-        const result = await runPromotionPolicy(deps, candidate,
-          clampText(typeof a.reason === 'string' ? a.reason : '', 500), plannedVersionId)
-        if (!result.ok) {
-          return neutralizeDeep({ ok: false, error: result.error })
-        }
+        // ── Step 4: Execute promotion (version create + candidate status + re-materialize + activation) ──
+        const result = await executePromotion(
+          deps,
+          candidate,
+          clampText(typeof a.reason === 'string' ? a.reason : '', 500),
+          plannedVersionId,
+          policyResult.activeMetrics,
+        )
+
+        // ── Step 5: Report activation state after executePromotion ──
         const state = activationState()
 
         return neutralizeDeep({
@@ -111,6 +128,37 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
       execute: async (args: never) => {
         const a = (args ?? {}) as Record<string, unknown>
         const versionId = typeof a.versionId === 'string' ? a.versionId : ''
+
+        // Pre-validate the rollback target's artifact when it has a known artifact
+        // directory.  A baseline version (modules: []) legitimately has no artifact,
+        // so only reject when the version record exists AND an artifact directory
+        // is expected but missing/corrupt.  When the artifact directory was never
+        // created (baseline), the rollback proceeds as before: activation will
+        // simply not mount a tool (modules is empty), which is safe.
+        const targetVersion = await store.getVersion(versionId)
+        if (!targetVersion) {
+          const result = await store.rollbackVersion(versionId)
+          if (!result) return neutralizeDeep({ ok: false, error: 'no version ' + versionId })
+          if (result.alreadyActive) return neutralizeDeep({ ok: false, error: 'version ' + versionId + ' is already active; nothing to roll back' })
+          const { refreshActivation, activationState } = await import('../activation/loader.ts')
+          await refreshActivation(deps)
+          const state = activationState()
+          return neutralizeDeep({ ok: true, versionId, restored: result.restored, deactivated: result.deactivated?.id ?? null, activation: { mountedVersionId: state.activeVersionId, mountedTool: state.activeTool, reason: state.reason } })
+        }
+        // The target has a non-empty modules list, so it was expected to have an
+        // artifact.  Validate it before mutating the store.
+        if (targetVersion.modules && targetVersion.modules.length > 0) {
+          const { validateArtifact } = await import('../activation/artifact.ts')
+          const validation = await validateArtifact(store.getRoot(), versionId)
+          if (!validation.valid) {
+            return neutralizeDeep({
+              ok: false,
+              error: 'rollback target ' + versionId + ' has an invalid artifact: ' + validation.errors.join('; '),
+              validationErrors: validation.errors,
+            })
+          }
+        }
+
         const result = await store.rollbackVersion(versionId)
         if (!result) return neutralizeDeep({ ok: false, error: 'no version ' + versionId })
         if (result.alreadyActive) return neutralizeDeep({ ok: false, error: 'version ' + versionId + ' is already active; nothing to roll back' })
