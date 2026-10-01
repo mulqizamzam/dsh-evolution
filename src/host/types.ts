@@ -84,7 +84,7 @@ export interface BenchmarkRun {
    * experience. The two must never be mixed silently, so the promotion gate
    * reads this field.
    */
-  mode?: 'simulated' | 'live'
+  mode?: 'simulated' | 'live' | 'manifest'
   /** The command executed for a live run. */
   command?: string
   /** Thresholds in force when the decision was made. */
@@ -233,6 +233,16 @@ export interface HostLlmGenerateOptions {
   system?: string
   maxTokens?: number
   temperature?: number
+  /**
+   * Reasoning level for routes that separate thinking from answer tokens.
+   *
+   * A thinking route can spend the ENTIRE output budget on reasoning and
+   * return an empty answer, which makes generation non-deterministic in cost
+   * and duration.  Candidate generation needs a parseable payload, not a
+   * long deliberation, so callers that require a complete answer should pin
+   * this to 'none'.
+   */
+  reasoningEffort?: string
 }
 
 export type HostLlmStreamChunk =

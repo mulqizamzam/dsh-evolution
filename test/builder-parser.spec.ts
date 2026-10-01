@@ -79,3 +79,200 @@ describe('parseFileSetFromLLMResponse', () => {
     expect(() => parseFileSetFromLLMResponse(empty)).toThrow(/no parseable JSON file set/)
   })
 })
+
+/**
+ * Found by a LIVE probe run: the model sometimes nests `files` under a
+ * wrapper key (`{manifest: {...}, candidate: {files: [...]}}`) instead of
+ * putting them at the top level.  The original parser only read `root.files`,
+ * so this shape produced an empty file set and "no parseable JSON file set".
+ */
+describe('parseFileSetFromLLMResponse — nested wrapper shapes', () => {
+  it('finds files nested under a wrapper key', () => {
+    const nested = {
+      manifest: VALID.manifest,
+      candidate: {
+        files: [{ path: 'src/index.ts', content: 'export const x = 1' }],
+        tests: [{ path: 'test/i.ts', content: 't' }],
+      },
+    }
+    const result = parseFileSetFromLLMResponse(JSON.stringify(nested))
+    expect(result.files).toHaveLength(1)
+    expect(result.files[0]!.path).toBe('src/index.ts')
+    expect(result.tests).toHaveLength(1)
+  })
+
+  it('finds files nested two levels deep', () => {
+    const deep = {
+      manifest: VALID.manifest,
+      wrapper: { inner: { files: [{ path: 'src/a.ts', content: 'a' }] } },
+    }
+    const result = parseFileSetFromLLMResponse(JSON.stringify(deep))
+    expect(result.files).toHaveLength(1)
+    expect(result.files[0]!.path).toBe('src/a.ts')
+  })
+
+  it('still prefers top-level files over a nested copy', () => {
+    const both = {
+      manifest: VALID.manifest,
+      files: [{ path: 'src/top.ts', content: 'top' }],
+      candidate: { files: [{ path: 'src/nested.ts', content: 'nested' }] },
+    }
+    const result = parseFileSetFromLLMResponse(JSON.stringify(both))
+    expect(result.files).toHaveLength(1)
+    expect(result.files[0]!.path).toBe('src/top.ts')
+  })
+
+  it('does not recurse past depth 3', () => {
+    const tooDeep = {
+      manifest: VALID.manifest,
+      a: { b: { c: { d: { files: [{ path: 'src/x.ts', content: 'x' }] } } } },
+    }
+    // depth 3 from root: a(1) -> b(2) -> c(3) -> d(4) stops.
+    // findKeyDeep checks `key in obj` first at each level, so files at depth 4
+    // is NOT reached — this documents the guard, not a preference.
+    expect(() => parseFileSetFromLLMResponse(JSON.stringify(tooDeep))).toThrow(/no parseable JSON file set/)
+  })
+})
+
+/**
+ * Found by a LIVE run: the model emitted the same path twice in `files`,
+ * and validateCandidateFileSet rejected the set with
+ * "duplicate files: test/index.spec.ts".  De-duplicating at normalize time
+ * (keep last) is strictly better than failing the whole candidate.
+ */
+describe('parseFileSetFromLLMResponse — duplicate file paths', () => {
+  it('de-duplicates files by path, keeping the last occurrence', () => {
+    const dupe = {
+      manifest: VALID.manifest,
+      files: [
+        { path: 'src/index.ts', content: 'first version' },
+        { path: 'src/index.ts', content: 'second version' },
+      ],
+      tests: [],
+    }
+    const result = parseFileSetFromLLMResponse(JSON.stringify(dupe))
+    expect(result.files).toHaveLength(1)
+    expect(result.files[0]!.content).toBe('second version')
+  })
+
+  it('de-duplicates tests independently of files', () => {
+    const dupe = {
+      manifest: VALID.manifest,
+      files: [{ path: 'src/index.ts', content: 'x' }],
+      tests: [
+        { path: 'test/a.ts', content: 'v1' },
+        { path: 'test/a.ts', content: 'v2' },
+      ],
+    }
+    const result = parseFileSetFromLLMResponse(JSON.stringify(dupe))
+    expect(result.tests).toHaveLength(1)
+    expect(result.tests[0]!.content).toBe('v2')
+  })
+
+  it('keeps distinct paths untouched', () => {
+    const multi = {
+      manifest: VALID.manifest,
+      files: [
+        { path: 'src/a.ts', content: 'a' },
+        { path: 'src/b.ts', content: 'b' },
+      ],
+      tests: [],
+    }
+    const result = parseFileSetFromLLMResponse(JSON.stringify(multi))
+    expect(result.files).toHaveLength(2)
+  })
+})
+
+/**
+ * A single `{path, content}` object (not wrapped in an array) used to be read
+ * as a path→content map, producing two fake files named `path` and `content`
+ * — which then failed validation with "unsupported file type". Pin the fix.
+ */
+describe('parseFileSetFromLLMResponse — single file object', () => {
+  it('treats a lone {path, content} object as one file, not a two-entry map', () => {
+    const body = JSON.stringify({
+      manifest: VALID.manifest,
+      files: { path: 'src/index.ts', content: 'export const x = 1' },
+      tests: [],
+    })
+    const result = parseFileSetFromLLMResponse(body)
+    expect(result.files).toHaveLength(1)
+    expect(result.files[0]!.path).toBe('src/index.ts')
+    expect(result.files[0]!.content).toBe('export const x = 1')
+  })
+
+  it('still treats a multi-key map as a path→content map', () => {
+    const body = JSON.stringify({
+      manifest: VALID.manifest,
+      files: { 'src/a.ts': 'a', 'src/b.ts': 'b' },
+      tests: [],
+    })
+    const result = parseFileSetFromLLMResponse(body)
+    expect(result.files).toHaveLength(2)
+  })
+})
+
+/**
+ * Found by a LIVE run: with reasoning pinned off the model produced a COMPLETE
+ * document (finish_reason "stop", no truncation) whose TypeScript payload
+ * contained `\order?` inside a JSON string. `\o` is not a legal JSON escape, so
+ * `JSON.parse` rejected the whole candidate with "Bad escaped character in JSON
+ * at position 1383" — one character discarded an entire generated module.
+ */
+describe('parseFileSetFromLLMResponse — invalid escape repair', () => {
+  // Built by concatenation so the single backslash survives into the fixture.
+  const broken = '{"manifest":' + JSON.stringify(VALID.manifest)
+    + ',"files":[{"path":"src/index.ts","content":"type Opts = {\\order?: 1 }"}]}'
+
+  it('the pinned fixture really is unparseable as-is', () => {
+    // Guards the fixture itself: if a future change made this legal, the tests
+    // below would pass without exercising the repair at all.
+    expect(() => JSON.parse(broken)).toThrow(/Bad escaped character/)
+  })
+
+  it('recovers a file set whose content has an illegal escape', () => {
+    const result = parseFileSetFromLLMResponse(broken)
+    expect(result.files).toHaveLength(1)
+    expect(result.manifest.name).toBe(VALID.manifest.name)
+  })
+
+  it('recovers the literal backslash into the file content', () => {
+    const result = parseFileSetFromLLMResponse(broken)
+    // The model meant a literal backslash; the repair doubles it, and JSON.parse
+    // hands the single backslash back.
+    expect(result.files[0]!.content).toContain('\\order?')
+  })
+
+  it('leaves valid escapes untouched', () => {
+    // A newline escape and a doubled backslash must NOT be re-escaped.
+    const validEscapes = '{"manifest":' + JSON.stringify(VALID.manifest)
+      + ',"files":[{"path":"src/index.ts","content":"line1\\nline2\\\\end"}]}'
+    const result = parseFileSetFromLLMResponse(validEscapes)
+    expect(result.files[0]!.content).toBe('line1\nline2\\end')
+  })
+
+  it('does not treat an escaped quote as a literal backslash', () => {
+    // `\"` is a legal escape; doubling it would corrupt code that legitimately
+    // contains quoted strings.
+    const quoted = '{"manifest":' + JSON.stringify(VALID.manifest)
+      + ',"files":[{"path":"src/index.ts","content":"const s = \\"hi\\""}]}'
+    const result = parseFileSetFromLLMResponse(quoted)
+    expect(result.files[0]!.content).toBe('const s = "hi"')
+  })
+
+  it('repairs escapes even when the document also has trailing commas', () => {
+    const both = '{"manifest":' + JSON.stringify(VALID.manifest)
+      + ',"files":[{"path":"src/index.ts","content":"\\order"},],}'
+    const result = parseFileSetFromLLMResponse(both)
+    expect(result.files[0]!.content).toContain('\\order')
+  })
+
+  it('repairs a malformed \\u escape into literal text', () => {
+    const badUnicode = '{"manifest":' + JSON.stringify(VALID.manifest)
+      + ',"files":[{"path":"src/index.ts","content":"\\u00zz"}]}'
+    // A \uXXXX with non-hex digits is not an escape; it must become literal
+    // text rather than a silently mangled unicode sequence.
+    const result = parseFileSetFromLLMResponse(badUnicode)
+    expect(result.files[0]!.content).toContain('u00zz')
+  })
+})

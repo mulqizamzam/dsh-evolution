@@ -13,6 +13,7 @@ import type {
   AgentDefaultModelService,
 } from '../../types.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
+import { containPath } from '../../../lib/contain.ts'
 
 const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'text'; text: string }> => text(value)
 
@@ -117,6 +118,20 @@ async function callHostLLM(
       source: { kind: 'plugin', plugin: 'dsh-evolution' },
     }],
     maxTokens: 8192,
+    // Pin the reasoning level for candidate generation.  Without this a
+    // thinking route can spend the whole output budget on deliberation and
+    // return an EMPTY answer (measured: 8192/8192 completion tokens went to
+    // reasoning, content length 0, finish_reason=length).  That produced a
+    // parse failure, an { ok:false } result, and a ~90s call whose failure
+    // upstream test guards silently swallowed.  Generation needs a parseable
+    // payload, not a long deliberation.
+    //
+    // 'low' rather than 'none': the router fans out to whichever backend is
+    // available and they do NOT agree on the effort scale — 'none' drew
+    // HTTP 400 "reasoning_effort 'none' is not supported ... Supported
+    // values: [minimal, low, medium, high, xhigh, max]".  'low' is the
+    // smallest level every backend in that list accepts.
+    reasoningEffort: 'low',
   }
 
   let outcome = await consumeStream(llm.stream(options))
@@ -158,7 +173,7 @@ async function callHostLLM(
 
 // ── FileSet validation ──
 
-function validateCandidateFileSet(fileSet: CandidateFileSet): CandidateValidationResult {
+export function validateCandidateFileSet(fileSet: CandidateFileSet): CandidateValidationResult {
   const errors: string[] = []
   const warnings: string[] = []
 
@@ -169,9 +184,14 @@ function validateCandidateFileSet(fileSet: CandidateFileSet): CandidateValidatio
 
   const allFiles = [...fileSet.files, ...fileSet.tests]
 
+  // Preliminary gate only: the FINAL trust boundary is the filesystem writer
+  // (materializeArtifact) and the artifact validator. This check shares the
+  // plugin-wide containment rule so no module enforces a subtly different one.
+  const nominalRoot = '/candidate-files'
   for (const file of allFiles) {
-    if (file.path.includes('..')) errors.push('path traversal in: ' + file.path)
-    if (file.path.startsWith('/')) errors.push('absolute path: ' + file.path)
+    if (containPath(nominalRoot, file.path) === null) {
+      errors.push('path escapes the candidate root: ' + file.path)
+    }
     const ext = file.path.split('.').pop()?.toLowerCase()
     const safeExts = ['ts', 'js', 'json', 'md', 'yml', 'yaml', 'txt']
     if (ext && !safeExts.includes(ext)) {
@@ -180,6 +200,11 @@ function validateCandidateFileSet(fileSet: CandidateFileSet): CandidateValidatio
     if (file.path.endsWith('.sh') || file.path.endsWith('.exe')) {
       errors.push('executable artifact not allowed: ' + file.path)
     }
+  }
+
+  if (typeof fileSet.manifest.entryPoint === 'string' && fileSet.manifest.entryPoint !== ''
+    && containPath(nominalRoot, fileSet.manifest.entryPoint) === null) {
+    errors.push('path escapes the candidate root: ' + fileSet.manifest.entryPoint)
   }
 
   const paths = allFiles.map(f => f.path)
@@ -202,7 +227,8 @@ function validateCandidateFileSet(fileSet: CandidateFileSet): CandidateValidatio
 /**
  * Coerce a parsed object into the file-set shape. Real models return `files`
  * as either an array of {path, content} or a plain path->content map, and may
- * omit `tests` entirely.
+ * omit `tests` entirely. A single {path, content} OBJECT (not wrapped in an
+ * array) is also observed and must yield ONE file, not a two-entry map.
  */
 function toFileArray(value: unknown): Array<{ path: string; content: string }> {
   if (Array.isArray(value)) {
@@ -212,11 +238,43 @@ function toFileArray(value: unknown): Array<{ path: string; content: string }> {
       .map(entry => ({ path: String(entry.path), content: typeof entry.content === 'string' ? entry.content : '' }))
   }
   if (value !== null && typeof value === 'object') {
-    return Object.entries(value as Record<string, unknown>)
+    const obj = value as Record<string, unknown>
+    // A lone file descriptor, not a map. Without this the branch below reads
+    // the keys 'path' and 'content' as two filenames.
+    if (typeof obj.path === 'string') {
+      return [{ path: obj.path, content: typeof obj.content === 'string' ? obj.content : '' }]
+    }
+    return Object.entries(obj)
       .filter(([, v]) => typeof v === 'string')
       .map(([k, v]) => ({ path: k, content: v as string }))
   }
   return []
+}
+
+/**
+ * Find `files`/`tests` arrays even when nested under a wrapper key.
+ *
+ * Real models sometimes wrap the payload: `{"manifest": {...}, "candidate": {"files": [...]}}`
+ * instead of putting `files` at the top level.  The original parser only read
+ * `root.files`, so this shape produced an empty file set and a hard parse failure.
+ */
+function findKeyDeep(obj: Record<string, unknown>, key: string, depth = 0): unknown {
+  if (depth > 3) return undefined
+  if (key in obj) return obj[key]
+  for (const v of Object.values(obj)) {
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      const found = findKeyDeep(v as Record<string, unknown>, key, depth + 1)
+      if (found !== undefined) return found
+    }
+  }
+  return undefined
+}
+
+/** De-duplicate files by path, keeping the LAST occurrence (later wins). */
+function dedupeFiles(files: Array<{ path: string; content: string }>): Array<{ path: string; content: string }> {
+  const byPath = new Map<string, { path: string; content: string }>()
+  for (const f of files) byPath.set(f.path, f)
+  return [...byPath.values()]
 }
 
 function normalizeFileSet(parsed: unknown): CandidateFileSet {
@@ -224,6 +282,11 @@ function normalizeFileSet(parsed: unknown): CandidateFileSet {
   const manifest = (root.manifest ?? root) as Record<string, unknown>
   const rawManifest = manifest as unknown as CandidateFileSet['manifest']
   const cases = Array.isArray(manifest.benchmarkCases) ? manifest.benchmarkCases : []
+
+  // files/tests may sit at top level or under a wrapper key (shape B).
+  const filesRaw = 'files' in root ? root.files : findKeyDeep(root, 'files')
+  const testsRaw = 'tests' in root ? root.tests : findKeyDeep(root, 'tests')
+
   return {
     manifest: {
       ...rawManifest,
@@ -233,8 +296,8 @@ function normalizeFileSet(parsed: unknown): CandidateFileSet {
       entryPoint: typeof manifest.entryPoint === 'string' ? manifest.entryPoint : 'src/index.ts',
       benchmarkCases: cases as CandidateFileSet['manifest']['benchmarkCases'],
     },
-    files: toFileArray(root.files),
-    tests: toFileArray(root.tests),
+    files: dedupeFiles(toFileArray(filesRaw)),
+    tests: dedupeFiles(toFileArray(testsRaw)),
   }
 }
 
@@ -259,9 +322,62 @@ function stripTrailingCommas(text: string): string {
 }
 
 /**
+ * Escape sequences JSON actually accepts. Anything else after a backslash
+ * inside a string is a hard parse error.
+ */
+const VALID_JSON_ESCAPES = new Set(['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'])
+
+/**
+ * Repair backslash escapes that JSON does not accept.
+ *
+ * Measured on a live model response: a TypeScript payload emitted `\order?`
+ * and `\n` sequences inside a JSON string, where `\o` is not a legal JSON
+ * escape. The document was otherwise complete (`finish_reason: stop`, no
+ * truncation) but `JSON.parse` rejected it with
+ * "Bad escaped character in JSON at position 1383" — so an entire candidate was
+ * lost to one character.
+ *
+ * A backslash that cannot start a valid escape is a literal backslash in the
+ * source the model meant to send, so it is doubled. Valid escapes are left
+ * untouched, and a `\` before a quote is always a real escape, never doubled.
+ * This only runs as a fallback after the untouched parse already failed.
+ */
+function repairInvalidEscapes(text: string): string {
+  let out = ''
+  let inString = false
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    if (!inString) {
+      if (ch === '"') inString = true
+      out += ch
+      continue
+    }
+    if (ch === '"') { inString = false; out += ch; continue }
+    if (ch !== '\\') { out += ch; continue }
+    const next = text[i + 1]
+    // Trailing backslash before end-of-input: nothing to escape, keep as-is.
+    if (next === undefined) { out += ch; continue }
+    // `\u` needs four hex digits. This must be checked BEFORE the generic
+    // escape set, because 'u' is itself a valid escape lead: a `\u00zz` would
+    // otherwise pass through untouched and fail later as a bad unicode escape
+    // with the same fatal result this function exists to prevent.
+    if (next === 'u') {
+      const hex = text.slice(i + 2, i + 6)
+      if (/^[0-9a-fA-F]{4}$/.test(hex)) { out += text.slice(i, i + 6); i += 5; continue }
+      out += '\\\\'
+      continue
+    }
+    if (VALID_JSON_ESCAPES.has(next)) { out += ch; continue }
+    out += '\\\\'
+  }
+  return out
+}
+
+/**
  * Extract a candidate file set from a model response. Models wrap JSON in
  * prose or fences, so try, in order: the raw text, every fenced block, and the
- * outermost brace-balanced span — each with and without trailing-comma repair.
+ * outermost brace-balanced span — each with and without trailing-comma repair
+ * and with and without invalid-escape repair.
  */
 export function parseFileSetFromLLMResponse(content: string): CandidateFileSet {
   const attempts: string[] = []
@@ -279,7 +395,12 @@ export function parseFileSetFromLLMResponse(content: string): CandidateFileSet {
   }
 
   for (const attempt of attempts) {
-    for (const variant of [attempt, stripTrailingCommas(attempt)]) {
+    for (const variant of [
+      attempt,
+      stripTrailingCommas(attempt),
+      repairInvalidEscapes(attempt),
+      repairInvalidEscapes(stripTrailingCommas(attempt)),
+    ]) {
       try {
         const parsed = JSON.parse(variant)
         const fileSet = normalizeFileSet(parsed)
@@ -413,10 +534,20 @@ export function builderTools(deps: ModuleDeps): ToolDefinition[] {
 
         const candidatesDir = join(store.getRoot(), 'candidates', candidate.id)
         await mkdir(candidatesDir, { recursive: true })
+        // Final boundary for THIS writer: resolve every target through the
+        // shared containment rule before any per-file directory is created,
+        // so an escaping path cannot produce even a partial outside write.
+        const targets: Array<{ target: string; content: string }> = []
         for (const file of [...fileSet.files, ...fileSet.tests]) {
-          const filePath = join(candidatesDir, file.path)
-          await mkdir(dirname(filePath), { recursive: true })
-          await writeFile(filePath, file.content, 'utf8')
+          const target = containPath(candidatesDir, file.path)
+          if (target === null) {
+            return neutralizeDeep({ ok: false, error: 'candidate path escapes the candidate directory: ' + file.path })
+          }
+          targets.push({ target, content: file.content })
+        }
+        for (const { target, content } of targets) {
+          await mkdir(dirname(target), { recursive: true })
+          await writeFile(target, content, 'utf8')
         }
         await writeFile(join(candidatesDir, 'manifest.json'), JSON.stringify(fileSet.manifest, null, 2), 'utf8')
 
