@@ -114,3 +114,88 @@ Activation order and refusals:
    that cannot activate never becomes the active version.
 6. Rollback disposes the mounted fiber immediately; a later boot mounts whatever
    the active version is (or nothing, with an explicit reason).
+
+## 7. Fresh-experience gate — bounded read window (known limitation)
+
+**Date**: 2026-09-19 (Mission C.1 sequential probe)
+**Severity**: Known limitation — not a defect; preserves intentional semantics.
+**Files involved** (read-only — source/tests unchanged):
+- `src/host/modules/auto-experience/index.ts:353` (bounded read)
+- `src/host/modules/auto-experience/index.ts:359-362` (fresh-experience gate)
+- `src/host/modules/auto-experience/index.ts:376` (window baseline capture)
+- `src/host/store.ts:129-130` → `src/lib/fsx.ts:43-63` (`listDir` mtime-descending, truncated to `limit`)
+
+### Mechanism
+
+The autonomous cycle reads experiences through a bounded window:
+
+```typescript
+const experiences = await deps.store.listExperiences(cfg.analysis.minExperiences * 4)
+```
+
+`listExperiences(limit)` calls `listDir(dir, limit)`, which stats every file in the
+experience directory (O(N) cost), sorts by mtime descending, and truncates to `limit`
+records. The gate then compares observed growth against the window:
+
+```typescript
+if (guards.lastCycleExperienceCount >= 0
+  && experiences.length - guards.lastCycleExperienceCount < cfg.analysis.minExperiences) {
+  return { ran: false, reason: 'waiting for more new experiences' }
+}
+```
+
+After a productive cycle, `guards.lastCycleExperienceCount = experiences.length`
+captures the window count as the baseline for the next cycle.
+
+### Why it saturates
+
+Once the total number of stored experiences exceeds the window size
+(`minExperiences * 4`), every subsequent call returns exactly `window` records —
+the newest by mtime, regardless of how many new records were added.
+`lastCycleExperienceCount` was set to `window` on the previous cycle, so:
+
+```
+delta = experiences.length - lastCycleExperienceCount
+      = window - window
+      = 0  <  minExperiences  →  gate blocks permanently
+```
+
+With `minExperiences = 5`, the window is 20. After 4 productive cycles
+(total = 5 + 4×5 = 25 ≥ 20), the cycle-5 attempt returns reason (b) and all
+subsequent attempts do likewise.
+
+### Observable effect
+
+Mission C.1 Phase B (`test/sequential-improvements.spec.ts:220+`) overrides
+`maxCyclesPerProcess` to 10 and supplies fresh unique error signatures between
+each cycle. Progression stops at cycle 5 with:
+
+```
+reason: 'b) fresh-experience requirement'
+```
+
+This is **not**:
+- (a) cap exhaustion — `cyclesRun` is far below `maxCyclesPerProcess`
+- (c) pattern dedup — fresh unique signatures are supplied each cycle
+
+The probe explicitly classifies this stop reason at lines 281-302, with the
+comment: *"do not inflate the window to hide it."*
+
+### Why this is not operator config
+
+The read window is derived internally (`minExperiences * 4`), not read from a
+standalone config key. Enlarging the multiplier only moves the saturation point
+(total ≥ window) and increases per-call record reads — it does not eliminate the
+bounded-delta defect; it merely postpones it. The per-call cost includes O(N)
+stat calls across the full experience directory (`fsx.ts:43-63`), which is
+independent of window size.
+
+If future roadmaps require more than ~4 sequential autonomous cycles per process,
+the bounded read semantics need a dedicated mission — not a config-table entry.
+
+### Preserved intentionally
+
+This behavior was surfaced by Mission C.1 and preserved per the 2026-09-19
+directive. The bounded window is a deliberate trade-off: it bounds per-cycle I/O
+and limits pattern-detection scope to recent evidence, which matches the intended
+autonomous evolution semantics (recent-relevance bias).
