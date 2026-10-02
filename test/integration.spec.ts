@@ -448,22 +448,14 @@ describe('Full lifecycle: experience -> analyze -> candidate -> sandbox -> bench
     expect(benchResult.executionResult!.stdout).toContain('lifecycle-ok')
     expect(benchResult.executionResult!.exitCode).toBe(0)
 
-    // 6. Record simulated benchmark pass
-    await store.addBenchmark({
-      candidateId, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 0.9, avgScore: 0.85, errorRate: 0.1, avgSteps: 5, avgDurationMs: 15000 },
-      passed: true, details: 'All thresholds met.',
-    })
+    // 6. Update candidate to benchmarked. The live benchmark from step 5 already
+    //    carries mode='live' and a valid provenance seal, so promotion is allowed.
     await store.updateCandidate(candidateId, { status: 'benchmarked' })
 
-    // 7. Promote decision
+    // 7. Actually promote — the live benchmark from step 5 already meets the
+    //    trust boundary: mode='live' + provenance seal. The evo_promote tool
+    //    validates these directly via evaluatePromotionPolicy.
     const { promoteTools } = await import('../src/host/modules/promote/tools.ts')
-    const decision = promoteTools(deps).find(t => t.name === 'evo_promote_decision')!
-    // Seeded simulated evidence: the decision requires the explicit override.
-    const promoResult = await decision.execute({ candidateId, allowSimulated: true } as never, { signal: AbortSignal.timeout(5000) }) as { recommendation: string }
-    expect(promoResult.recommendation).toBe('PROMOTE')
-
-    // 8. Actually promote
     const promote = promoteTools(deps).find(t => t.name === 'evo_promote')!
     const promoted = await promote.execute({ candidateId, reason: 'lifecycle test' } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; version: { id: string } }
     expect(promoted.ok).toBe(true)

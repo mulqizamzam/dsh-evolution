@@ -460,8 +460,8 @@ describe('UNIFIED PROMOTION AUTHORITY — comparative gate in runPromotionPolicy
     } finally { await rm(tmpRoot, { recursive: true, force: true }) }
   })
 
-  // ── Simulated benchmark bypass: simulated evidence does NOT trigger beats_active ──
-  it('simulated benchmark does not trigger beats_active gate (only live evidence counts)', async () => {
+  // ── Simulated evidence rejection: M3.3 trust boundary ──
+  it('simulated benchmark rejected by evaluatePromotionPolicy when active has live evidence', async () => {
     const tmpRoot = await mkdtemp(join(tmpdir(), 'evo-unified-sim-'))
     try {
       const store = new EvolutionStore({ fallbackRoot: tmpRoot })
@@ -491,14 +491,85 @@ describe('UNIFIED PROMOTION AUTHORITY — comparative gate in runPromotionPolicy
           errorRate: { max: 0.2, weight: 1 }, avgSteps: { max: 50, weight: 0.5 }, avgDurationMs: { max: 60000, weight: 0.5 },
         },
       })
-      // v2 has a SIMULATED benchmark (worse than v1, but simulated)
-      await runBenchmark(store, v2.id, 0.86, 'simulated')
+      // v2 has a SIMULATED benchmark only
+      await runBenchmark(store, v2.id, 0.99, 'simulated')
 
       const deps: ModuleDeps = { ctx: makeCtx(), cfg: () => resolveConfig({ stateRoot: tmpRoot }), store, log: () => {}, warn: () => {} }
       const result = await runPromotionPolicy(deps, v2, 'sim-promo', 'v2-probe')
-      // Gate is skipped when candidate benchmark is simulated (must match the same
-      // trusted evaluation as the active version; simulated evidence is not trusted)
+      // M3.3: simulated evidence must NOT promote when active has live evidence
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toContain('simulated evidence')
+      }
+    } finally { await rm(tmpRoot, { recursive: true, force: true }) }
+  })
+
+  // Contract C-1 (docs/CONTRACTS.md): simulated evidence is rejected even when
+  // there is no active version to compare against.
+  it('first version with simulated benchmark is REJECTED (contract C-1)', async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), 'evo-unified-sim-first-'))
+    try {
+      const store = new EvolutionStore({ fallbackRoot: tmpRoot })
+      await store.init()
+
+      const v1 = await store.addCandidate({
+        parentVersion: 'v0', type: 'policy', name: 'v1', description: 'd', reason: 'r',
+        evidenceIds: [], patternIds: [], status: 'draft',
+        files: [{ path: 'src/index.ts', content: 'x=1\n' }],
+        tests: [],
+        benchmarkConfig: {
+          successRate: { min: 0.8, weight: 1 }, avgScore: { min: 0.7, weight: 1 },
+          errorRate: { max: 0.2, weight: 1 }, avgSteps: { max: 50, weight: 0.5 }, avgDurationMs: { max: 60000, weight: 0.5 },
+        },
+      })
+      // v1 has a SIMULATED benchmark — no active version exists yet
+      await runBenchmark(store, v1.id, 0.99, 'simulated')
+
+      const deps: ModuleDeps = { ctx: makeCtx(), cfg: () => resolveConfig({ stateRoot: tmpRoot }), store, log: () => {}, warn: () => {} }
+      const result = await runPromotionPolicy(deps, v1, 'first-sim', 'v1-probe')
+
+      // The absence of an active baseline must not become a licence to install
+      // a never-executed record as the trust anchor.
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toContain('simulated evidence')
+      }
+      // A rejected promotion creates nothing and installs no active state.
+      expect(await store.listVersions(200)).toHaveLength(0)
+      expect(await store.readPointer()).toBeNull()
+      expect(await store.getActiveVersion()).toBeNull()
+    } finally { await rm(tmpRoot, { recursive: true, force: true }) }
+  })
+
+  // Counterpart to the test above: the first version is NOT blocked when it
+  // carries real execution evidence, so C-1 does not make the fresh root a
+  // dead end — it only excludes simulated evidence.
+  it('first version with a LIVE benchmark promotes normally (C-1 does not block live evidence)', async () => {
+    const tmpRoot = await mkdtemp(join(tmpdir(), 'evo-unified-live-first-'))
+    try {
+      const store = new EvolutionStore({ fallbackRoot: tmpRoot })
+      await store.init()
+
+      const v1 = await store.addCandidate({
+        parentVersion: 'v0', type: 'policy', name: 'v1', description: 'd', reason: 'r',
+        evidenceIds: [], patternIds: [], status: 'draft',
+        files: [{ path: 'src/index.ts', content: 'x=1\n' }],
+        tests: [],
+        benchmarkConfig: {
+          successRate: { min: 0.8, weight: 1 }, avgScore: { min: 0.7, weight: 1 },
+          errorRate: { max: 0.2, weight: 1 }, avgSteps: { max: 50, weight: 0.5 }, avgDurationMs: { max: 60000, weight: 0.5 },
+        },
+      })
+      await runBenchmark(store, v1.id, 0.99, 'live')
+
+      const deps: ModuleDeps = { ctx: makeCtx(), cfg: () => resolveConfig({ stateRoot: tmpRoot }), store, log: () => {}, warn: () => {} }
+      const result = await runPromotionPolicy(deps, v1, 'first-live', 'v1-probe')
+
       expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.version.id).toBe('v1')
+        expect(result.version.status).toBe('active')
+      }
     } finally { await rm(tmpRoot, { recursive: true, force: true }) }
   })
 })

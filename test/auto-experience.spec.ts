@@ -212,4 +212,114 @@ describe('runAutoCycle: threshold and loop safety', () => {
     expect(outcome.ran).toBe(false)
     expect(outcome.reason).toContain('disabled')
   })
+
+  // ── Mission C.1 accounting regression ──
+  // A productive cycle that throws after its slot was charged must roll the
+  // slot back: an exception is a "failed pre-execution attempt", never an
+  // actually-started productive cycle.
+
+  it('a cycle that throws after increment does not consume an extra cycle slot', async () => {
+    const OVERRIDE = {
+      evolution: {
+        enabled: true, autoTrigger: true,
+        analysis: { minExperiences: 5, minOccurrences: 2 },
+        generation: { enabled: false },  // analysis-only: deterministic
+        promotion: { enabled: false },
+        maxCyclesPerProcess: 2,
+      },
+    }
+
+    for (let i = 0; i < 5; i++) {
+      await store.addExperience({ success: false, errors: ['sig-accounting'], stepCount: 3, prompt: 'x' })
+    }
+
+    // Fault injected AFTER `guards.cyclesRun += 1` so the catch path must
+    // refund the slot. The earliest post-increment hook is `deps.log`.
+    let faultNextLog = true
+    const deps1: ModuleDeps = {
+      ctx: makeCtx(),
+      cfg: () => resolveConfig({ stateRoot: tmpRoot, ...OVERRIDE }),
+      store,
+      log: () => {
+        if (faultNextLog) { faultNextLog = false; throw new Error('injected log fault after increment') }
+      },
+      warn: () => {},
+    }
+
+    const o1 = await runAutoCycle(deps1)
+    expect(o1.ran).toBe(false)
+    expect(o1.reason).toContain('cycle failed')
+    expect(o1.reason).toContain('injected log fault after increment')
+    // Slot refunded: the failed cycle must not have charged the cap.
+    expect(autoGuardState().cyclesRun).toBe(0)
+    expect(autoGuardState().inFlight).toBe(false)
+    // lastCycleExperienceCount was set to 5 before the throw (intentional:
+    // analysis side-effects are not rolled back, only the slot is). So a
+    // retry with the SAME experiences must hit the fresh-experience gate.
+    expect(autoGuardState().lastCycleExperienceCount).toBe(5)
+
+    // Add fresh experiences so the gate passes, then retry with a healthy
+    // deps: this must charge exactly one slot (not two).
+    for (let i = 0; i < 5; i++) {
+      await store.addExperience({ success: false, errors: ['sig-accounting-2'], stepCount: 3, prompt: 'x2' })
+    }
+    const deps2 = makeDeps(store, tmpRoot, OVERRIDE)
+    const o2 = await runAutoCycle(deps2)
+    expect(o2.ran).toBe(true)
+    expect(autoGuardState().cyclesRun).toBe(1)
+    void o2
+
+    resetAutoGuards()
+  })
+
+  it('cap still prevents cycles after the configured maximum', async () => {
+    // Two unique signatures so each re-analysis actually has fresh patterns.
+    const OVERRIDE = {
+      evolution: {
+        enabled: true, autoTrigger: true,
+        analysis: { minExperiences: 5, minOccurrences: 2 },
+        maxCyclesPerProcess: 1,
+      },
+    }
+
+    const deps = makeDeps(store, tmpRoot, OVERRIDE)
+
+    for (let i = 0; i < 5; i++) await store.addExperience({ success: false, errors: ['sig-capoler-cycle-1'], stepCount: 3, prompt: 'x' })
+    const o1 = await runAutoCycle(deps)
+    expect(o1.ran).toBe(true)
+    expect(autoGuardState().cyclesRun).toBe(1)
+
+    // Fresh experiences so we do not stop on the new-experience gate.
+    for (let i = 0; i < 5; i++) await store.addExperience({ success: false, errors: ['sig-capoler-cycle-2'], stepCount: 3, prompt: 'x' })
+    const o2 = await runAutoCycle(deps)
+    expect(o2.ran).toBe(false)
+    expect(o2.reason).toContain('cap reached')
+    expect(autoGuardState().cyclesRun).toBe(1)
+  })
+
+  it('resetAutoGuards restores cap for a new process/restart', async () => {
+    const OVERRIDE = {
+      evolution: {
+        enabled: true, autoTrigger: true,
+        analysis: { minExperiences: 5, minOccurrences: 2 },
+        maxCyclesPerProcess: 1,
+      },
+    }
+
+    const deps = makeDeps(store, tmpRoot, OVERRIDE)
+    for (let i = 0; i < 5; i++) await store.addExperience({ success: false, errors: ['sig-restart-1'], stepCount: 3, prompt: 'x' })
+    const o1 = await runAutoCycle(deps)
+    expect(o1.ran).toBe(true)
+    expect(autoGuardState().cyclesRun).toBe(1)
+
+    // Restart
+    resetAutoGuards()
+    expect(autoGuardState().cyclesRun).toBe(0)
+    expect(autoGuardState().lastCycleExperienceCount).toBe(-1)
+
+    for (let i = 0; i < 5; i++) await store.addExperience({ success: false, errors: ['sig-restart-2'], stepCount: 3, prompt: 'x' })
+    const o2 = await runAutoCycle(makeDeps(store, tmpRoot, OVERRIDE))
+    expect(o2.ran).toBe(true)
+    expect(autoGuardState().cyclesRun).toBe(1)
+  })
 })

@@ -4,11 +4,15 @@
  * Closes the trust boundary gap between simulated and live benchmark evidence
  * in the promotion system.
  *
+ * Scenario 4 was originally `first_version_simulated_accepted`. It is now
+ * `first_version_simulated_rejected` — see contract C-1 in docs/CONTRACTS.md.
+ * The trust boundary has no blind spot at the fresh root.
+ *
  * Scenarios:
  *   1. simulated_only_rejected_by_evaluate_policy
  *   2. simulated_only_rejected_by_evo_promote_tool
  *   3. live_evidence_allows_promotion
- *   4. first_version_simulated_accepted
+ *   4. first_version_simulated_rejected
  *   5. forged_provenance_rejected
  *   6. cross_candidate_evidence_reuse_rejected
  *   7. replay_after_active_changes_rejected
@@ -63,6 +67,8 @@ async function addSimBenchmark(store: EvolutionStore, candidateId: string, succe
 /**
  * Add a live benchmark with a valid provenance seal for a candidate.
  * The provenance is computed from the candidate's actual fields.
+ * The authoritative createdAt is passed to both the seal and the store
+ * so the persisted record carries exactly the timestamp used in the seal.
  */
 async function addLiveBenchmark(
   store: EvolutionStore,
@@ -83,7 +89,7 @@ async function addLiveBenchmark(
     mode: 'live',
     command,
     provenance,
-  })
+  }, createdAt)
 }
 
 /** Setup: create a v1 active version with live benchmark at the given rate. */
@@ -195,7 +201,7 @@ describe('M3.3 — Evidence Trust Boundary', () => {
   })
 
   // 4 ────────────────────────────────────────────────────────────────────────
-  it('first version with simulated evidence is accepted (no active to compare)', async () => {
+  it('first version with simulated evidence is REJECTED (contract C-1)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'm33-first-'))
     try {
       const store = new EvolutionStore({ fallbackRoot: root })
@@ -216,8 +222,16 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       const deps = makeDeps(store, root)
       const result = await evaluatePromotionPolicy(deps, await store.getCandidate(v1.id)!)
 
-      // No active version → capturedActiveMetrics is undefined → gate skipped entirely
-      expect(result.ok).toBe(true)
+      // Contract C-1 (docs/CONTRACTS.md): simulated evidence is rejected
+      // UNCONDITIONALLY, including when no active version exists. Previously
+      // this case was accepted because the gate was guarded by
+      // `capturedActiveMetrics`, which is undefined on a fresh root — meaning
+      // the very first version could be installed from a record that was never
+      // executed, becoming the baseline for every later beats_active comparison.
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toContain('simulated evidence')
+      }
     } finally { await rm(root, { recursive: true, force: true }) }
   })
 
@@ -252,10 +266,10 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       const candidate = await store.getCandidate(v2Id)!
       const result = await evaluatePromotionPolicy(deps, candidate)
 
-      // Provenance verification fails → rejected
+      // Provenance seal mismatch → rejected (consistency failure, not tampering)
       expect(result.ok).toBe(false)
       if (!result.ok) {
-        expect(result.error).toMatch(/provenance verification|tampered/i)
+        expect(result.error).toMatch(/provenance.*mismatch|consistency/i)
       }
       void record
     } finally { await rm(root, { recursive: true, force: true }) }
@@ -318,7 +332,7 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       // → re-derivation uses v2.id → mismatch → rejected
       expect(result.ok).toBe(false)
       if (!result.ok) {
-        expect(result.error).toMatch(/provenance|tampered/i)
+        expect(result.error).toMatch(/provenance.*mismatch|consistency/i)
       }
     } finally { await rm(root, { recursive: true, force: true }) }
   })

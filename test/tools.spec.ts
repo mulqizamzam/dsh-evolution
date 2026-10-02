@@ -178,13 +178,14 @@ describe('Tool definitions', () => {
   })
 
   describe('benchmarkTools', () => {
-    it('returns 4 tools', () => {
+    it('returns 5 tools', () => {
       const tools = benchmarkTools(deps)
-      expect(tools.length).toBe(4)
+      expect(tools.length).toBe(5)
       expect(tools.map(t => t.name)).toContain('evo_benchmark_run')
       expect(tools.map(t => t.name)).toContain('evo_benchmark_compare')
       expect(tools.map(t => t.name)).toContain('evo_benchmark_live')
       expect(tools.map(t => t.name)).toContain('evo_benchmark_ab')
+      expect(tools.map(t => t.name)).toContain('evo_benchmark_manifest')
     })
 
     it('benchmark_run handles non-existent candidate', async () => {
