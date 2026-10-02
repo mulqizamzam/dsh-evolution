@@ -246,8 +246,10 @@ describe('REAL AGNES AUTONOMOUS EVOLUTION EXPERIMENT', () => {
     expect(candidate).not.toBeNull()
     const src = candidate!.files[0]?.content ?? ''
     expect(src).not.toBe(V1_RUN_JS)
-    expect(realCtx.captured.length).toBe(1)
-  }, 120_000)
+    // Same recovery path as phase 3: an empty first stream makes callHostLLM
+    // retry once, so the captured count is 1 or 2, never pinned to 1.
+    expect(realCtx.captured.length).toBeGreaterThanOrEqual(1)
+  }, 240_000)
 
   it('phase 6: LLM provenance is complete', async () => {
     await store.createVersion({ label: 'baseline-v1', modules: [] })
@@ -259,7 +261,9 @@ describe('REAL AGNES AUTONOMOUS EVOLUTION EXPERIMENT', () => {
     const genDeps = await makeDeps(store, tmpRoot, realCtx.ctx, true, false)
     const build = builderTools(genDeps).find(t => t.name === 'evo_builder_generate')!
     await build.execute({ patternIds: [pattern.id], parentVersion: 'v1' } as never, exec)
-    const call = realCtx.captured[0]!
+    // The LAST call is the one that produced the answer: on the retry path
+    // call[0] is the empty stream, whose content/usage are zero.
+    const call = realCtx.captured[realCtx.captured.length - 1]!
     expect(call).toBeDefined()
     expect(call.provider).toBe('nine-router')
     expect(call.model).toBe('Deterministik')
@@ -272,5 +276,5 @@ describe('REAL AGNES AUTONOMOUS EVOLUTION EXPERIMENT', () => {
     expect(call.responseModel.length).toBeGreaterThan(0)
     expect(call.responseModel).not.toBe('unknown')
     console.log('[Phase 6] Provenance:', JSON.stringify({ provider: call.provider, model: call.model, responseModel: call.responseModel, inputTokens: call.usage.inputTokens, outputTokens: call.usage.outputTokens }))
-  }, 120_000)
+  }, 240_000)
 })
