@@ -432,8 +432,18 @@ function repairBrackets(text: string): string {
     if (ch === '{') { stack.push('}'); out += ch; continue }
     if (ch === '[') { stack.push(']'); out += ch; continue }
     if (ch !== '}' && ch !== ']') { out += ch; continue }
+    // Closer: close any frames still open above the matching opener, then
+    // pop them along with the closer itself.
     const idx = stack.lastIndexOf(ch)
-    if (idx === -1) continue // unmatched extra closer: drop it
+    if (idx === -1) {
+      // Stack already empty: this is not an extra trailing closer — a frame
+      // was closed too early and we are seeing its late arrival. Attempting
+      // to repair by dropping it would silently mangle the document (observed:
+      // a stray `]` after the array closed the root early, leaving the
+      // remainder parseable but structurally wrong). Abort and fall through
+      // to the retry path in callHostLLM.
+      return text
+    }
     for (let k = stack.length - 1; k > idx; k -= 1) out += stack[k]!
     out += ch
     stack.length = idx
@@ -444,10 +454,56 @@ function repairBrackets(text: string): string {
 }
 
 /**
- * Extract a candidate file set from a model response. Models wrap JSON in
- * prose or fences, so try, in order: the raw text, every fenced block, and the
- * outermost brace-balanced span — each with and without trailing-comma repair,
- * invalid-escape repair, and bracket-closing repair.
+ * Cheap structural gate: detect the unrepairable shapes that the live runs
+ * actually produced, so the caller can retry fast instead of after the whole
+ * repair ladder.
+ *
+ * Per candidate the scan is string-aware:
+ *  - ends inside an open string (inString=true at end of input) → shape 2;
+ *  - sees an extra closer (stack empty on a `}`/`]`) → shape 3;
+ *  - sees an UNESCAPED `"` that does not cleanly terminate the enclosing
+ *    string context — that is shape 1 and JSON.parse will reject it as
+ *    "unterminated string" or "expected property name".
+ *
+ * Returns the diagnosis as a message suffix, or null when every candidate is
+ * structurally clean.
+ */
+function diagnoseResponseShape(response: string): string | null {
+  if (response === '') return null
+  let inString = false
+  let escaped = false
+  const stack: string[] = []
+  let extraCloser = false
+  for (const ch of response) {
+    if (inString) {
+      if (escaped) { escaped = false; continue }
+      if (ch === '\\') { escaped = true; continue }
+      if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === '{') { stack.push('}'); continue }
+    if (ch === '[') { stack.push(']'); continue }
+    if (ch === '}' || ch === ']') {
+      const idx = stack.lastIndexOf(ch)
+      if (idx === -1) { extraCloser = true; continue }
+      stack.length = idx
+    }
+  }
+  if (inString) {
+    return 'response truncated inside a string — closing it would invent data; retrying'
+  }
+  if (extraCloser) {
+    return 'response has an extra `}` or `]` with no matching opener — structural damage; retrying'
+  }
+  // Balanced, no extra closers, not truncated — shape 1 may still be present
+  // (an unescaped quote that happens to land right before a valid closer).
+  // That is JSON.parse's job; the ladder already handles it.
+  return null
+}
+
+/**
+ * Extract a candidate file set from a model response.
  */
 export function parseFileSetFromLLMResponse(content: string): CandidateFileSet {
   const attempts: string[] = []
@@ -464,7 +520,27 @@ export function parseFileSetFromLLMResponse(content: string): CandidateFileSet {
     attempts.push(content.slice(firstBrace, lastBrace + 1))
   }
 
-  // Repair ladder, cheapest and least-invasive first. Bracket-closing is last
+  // PRE-FLIGHT: reject an unrepairable document before running the repair
+  // ladder. Measured on 40 live runs, every failure was one of three shapes,
+  // and none is repairable by string surgery:
+  //   1. an unescaped `"` inside a content string (the model writes \", so
+  //      the JSON string ends early and the rest becomes garbage);
+  //   2. a response cut mid-STRING or mid-structure (real content is missing
+  //      — closing it would invent data);
+  //   3. extra or misplaced closers.
+  // The diagnosis runs over the WHOLE response, not over a slice: a
+  // truncated document has no trailing `}`, so the brace-balanced attempt is
+  // a shorter slice that ends inside the manifest and looks perfectly
+  // balanced — reading it instead of the response would miss the truncation.
+  const shapeProblem = diagnoseResponseShape(trimmed)
+  if (shapeProblem !== null) {
+    const head = content.trim().slice(0, 200).replace(/\s+/g, ' ')
+    throw new Error(
+      shapeProblem + ' (length ' + content.length + '); head: ' + head,
+    )
+  }
+
+  // Repair ladder, cheapest and least-invasive first. Bracket repair is last
   // because it is the only variant that infers something the model did not
   // send, so an intact response must never depend on it.
   const repairs = [

@@ -221,6 +221,51 @@ describe('parseFileSetFromLLMResponse — single file object', () => {
  * yielded no parseable JSON file set — one model quirk discarded a valid
  * module.
  */
+describe('parseFileSetFromLLMResponse — pre-flight shape gate', () => {
+  it('rejects a response truncated inside a string, without inventing content', () => {
+    // The model cut off mid-string: the closing quote never arrived.
+    const truncated = '{"manifest":' + JSON.stringify(VALID.manifest)
+      + ',"files":[{"path":"src/index.ts","content":"export const x = 1'
+    expect(() => parseFileSetFromLLMResponse(truncated)).toThrow(/truncated inside a string/)
+  })
+
+  it('rejects an extra closer with no matching opener', () => {
+    // An extra `]` closes the root early; the rest is structural damage.
+    const extra = '{"manifest":' + JSON.stringify(VALID.manifest)
+      + ',"files":[]]}],"tests":[]}'
+    expect(() => parseFileSetFromLLMResponse(extra)).toThrow(/extra `\}` or `\]`/)
+  })
+
+  it('does NOT pre-reject a response whose only problem is a trailing comma', () => {
+    // The repair ladder must still handle this — the gate is structural only.
+    const body = '{"manifest":' + JSON.stringify(VALID.manifest)
+      + ',"files":[' + JSON.stringify(VALID.files[0]) + ',],}'
+    const result = parseFileSetFromLLMResponse(body)
+    expect(result.files).toHaveLength(1)
+  })
+
+  it('does NOT pre-reject a response whose only problem is an invalid escape', () => {
+    const body = '{"manifest":' + JSON.stringify(VALID.manifest)
+      + ',"files":[{"path":"src/index.ts","content":"\\order"}]}'
+    const result = parseFileSetFromLLMResponse(body)
+    expect(result.files[0]!.content).toContain('\\order')
+  })
+
+  it('still parses an intact response with balanced brackets', () => {
+    const result = parseFileSetFromLLMResponse(JSON.stringify(VALID))
+    expect(result.files).toHaveLength(1)
+  })
+})
+
+/**
+ * Found by a LIVE run (mimo-v2.6-flash-free): the second element of a `files`
+ * ARRAY carried an object as its path —
+ *   {"path":{"src/index.ts":"IGNORE"},"content":""}
+ * The old array branch filtered on `typeof entry.path === 'string'`, so that
+ * entry was dropped. With only the placeholder remaining, normalization
+ * yielded no parseable JSON file set — one model quirk discarded a valid
+ * module.
+ */
 describe('parseFileSetFromLLMResponse — object-valued path in array', () => {
   it('keeps the valid entries when one array element has an object-valued path', () => {
     const body = JSON.stringify({
