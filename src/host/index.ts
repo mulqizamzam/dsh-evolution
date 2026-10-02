@@ -146,12 +146,19 @@ async function boot(ctx: HostContextShape, rawConfig: Partial<EvoConfig>, log: R
   }
 
   // State root: config override > host dshHomePath service (profile-scoped) > env fallback.
-  const root = resolved.stateRoot !== '' ? resolved.stateRoot : resolveStateRoot(
-    function (name2: string) { return ctx.get(name2) },
-    undefined,
-    profileName,
-  )
-  const store = new EvolutionStore({ get: function (name2: string) { return ctx.get(name2) }, fallbackRoot: root, profileName })
+  //
+  // A configured stateRoot is an operator-supplied ABSOLUTE root and is used
+  // verbatim: the store receives no profileName so it cannot re-append one.
+  // Otherwise profile scoping is delegated entirely to the store (it is the
+  // only component that owns the "<base>/<profile>" contract).  Appending the
+  // profile here AND passing it to the store appended it twice, producing
+  // `<base>/web/web` — a root nothing else in the system ever reads.
+  const getFn = function (name2: string) { return ctx.get(name2) }
+  const configuredRoot = resolved.stateRoot
+  const store = configuredRoot !== ''
+    ? new EvolutionStore({ get: getFn, fallbackRoot: configuredRoot })
+    : new EvolutionStore({ get: getFn, profileName })
+  const root = store.getRoot()
 
   // Awaited: activation below reads the active version from disk, so the
   // scaffold must exist first.

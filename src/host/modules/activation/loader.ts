@@ -14,12 +14,14 @@
  */
 
 import { pathToFileURL } from 'node:url'
-import { readFile } from 'node:fs/promises'
+import { readFile, rm, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
+import { readdirSync } from 'node:fs'
 import {
   artifactFilesDir, artifactPluginPath, readArtifactManifest, validateArtifact, versionDir,
 } from './artifact.ts'
 import type { ArtifactManifest } from './artifact.ts'
+import { containPath } from '../../../lib/contain.ts'
 import type { ModuleDeps, SandboxRunner } from '../../types.ts'
 import { getSandbox } from '../sandbox/index.ts'
 import { errorMessage } from '../../../lib/errors.ts'
@@ -214,10 +216,40 @@ export async function activateVersion(deps: ModuleDeps, versionId: string): Prom
 }
 
 /**
+ * Clean up orphaned .staging directories from previously-crashed materializations.
+ * Safe to call on every refresh — only removes directories whose sibling (without
+ * the suffix) does not contain a valid manifest.  Never touches live artifacts.
+ */
+async function pruneStaleStaging(stateRoot: string): Promise<void> {
+  try {
+    const entries = readdirSync(join(stateRoot, 'versions'))
+    for (const entry of entries) {
+      if (!entry.endsWith('.staging')) continue
+      const siblingId = entry.slice(0, -'.staging'.length)
+      // If the sibling is a version directory with a valid manifest, the staging
+      // dir may be an in-progress replacement — skip it.
+      const siblingManifest = join(stateRoot, 'versions', siblingId, 'manifest.json')
+      try {
+        await readFile(siblingManifest, 'utf8')
+        continue
+      } catch {
+        // No valid manifest in the sibling — the staging dir is an orphan.
+      }
+      await rm(join(stateRoot, 'versions', entry), { recursive: true, force: true })
+    }
+  } catch {
+    // Pruning must never break activation.
+  }
+}
+
+/**
  * Bring the mounted plugin in line with the ACTIVE version. Called at boot and
  * after every promotion/rollback. Never throws.
  */
 export async function refreshActivation(deps: ModuleDeps): Promise<void> {
+  // Clean up any stale .staging directories left by previously-crashed
+  // materializations before attempting to mount the active artifact.
+  await pruneStaleStaging(deps.store.getRoot())
   try {
     const active = await deps.store.getActiveVersion()
     if (!active) {
@@ -291,13 +323,35 @@ export function createRuntimeService(deps: ModuleDeps): EvolutionRuntimeService 
 
 /** Absolute path to a version's copied candidate entry file (diagnostics). */
 export function artifactEntryPath(stateRoot: string, versionId: string, entryPoint: string): string {
-  return join(artifactFilesDir(stateRoot, versionId), entryPoint)
+  const filesRoot = artifactFilesDir(stateRoot, versionId)
+  const target = containPath(filesRoot, entryPoint)
+  if (target === null) {
+    throw new Error('entry point escapes the artifact files root: ' + JSON.stringify(String(entryPoint)))
+  }
+  return target
 }
 
 /** Read a copied artifact file (diagnostics/tests). */
 export async function readArtifactFile(stateRoot: string, versionId: string, path: string): Promise<string | null> {
+  const filesRoot = artifactFilesDir(stateRoot, versionId)
+  // Lexical containment first: reject without touching the filesystem.
+  const target = containPath(filesRoot, path)
+  if (target === null) return null
+  // For a path that points to an EXISTING file we are about to read, the file
+  // may have been turned into a symlink AFTER materialization (tampered
+  // persisted artifact — T10/T11 class). Resolve the real filesystem target
+  // and re-check containment against the real files root so a symlink that
+  // points outside cannot be followed.
   try {
-    return await readFile(join(artifactFilesDir(stateRoot, versionId), path), 'utf8')
+    const realRoot = await realpath(filesRoot)
+    let realTarget: string
+    try {
+      realTarget = await realpath(target)
+    } catch {
+      return null // not found
+    }
+    if (containPath(realRoot, realTarget) === null) return null // symlink points outside
+    return await readFile(realTarget, 'utf8')
   } catch {
     return null
   }

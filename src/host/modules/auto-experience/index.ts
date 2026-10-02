@@ -345,6 +345,10 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
   }
 
   guards.inFlight = true
+  // Track whether this cycle consumed a slot so the catch block can roll it
+  // back: a cycle that threw after the increment did not complete productively
+  // and must not burn the per-process cap.
+  let slotConsumed = false
   try {
     const experiences = await deps.store.listExperiences(cfg.analysis.minExperiences * 4)
     if (experiences.length < cfg.analysis.minExperiences) {
@@ -387,6 +391,7 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
     }
 
     guards.cyclesRun += 1
+    slotConsumed = true
     deps.log('auto-cycle: ' + fresh.length + ' new pattern(s) from ' + experiences.length + ' experiences')
 
     // If the active version is degraded, prepend a synthetic degradation
@@ -449,6 +454,8 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
       verdict: verdict?.recommendation,
     }
   } catch (error) {
+    // Return the slot so a transient I/O failure cannot exhaust the cap.
+    if (slotConsumed) guards.cyclesRun -= 1
     return { ran: false, reason: 'cycle failed: ' + String(error instanceof Error ? error.message : error) }
   } finally {
     guards.inFlight = false
@@ -552,7 +559,13 @@ export function apply(deps: ModuleDeps): void {
           reason: observed.reasonKind,
           toolCalls: observed.toolCallNames,
         },
-      }).then(() => runAutoCycle(deps)).catch(() => { /* observation must never break the turn */ })
+      }).then(async () => {
+        // Enforce retention and count cap so the store stays within configured limits.
+        // Failures are fire-and-forget: they must not block pattern analysis.
+        const expCfg = deps.cfg().experience
+        try { await deps.store.pruneExperiences(expCfg.maxRecords, expCfg.retentionDays) } catch { /* ignore prune failures */ }
+        void runAutoCycle(deps)
+      }).catch(() => { /* observation must never break the turn */ })
     } catch {
       // A listener failure must never surface into the agent loop.
     }

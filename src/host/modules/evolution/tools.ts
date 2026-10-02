@@ -308,9 +308,17 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
         }
 
         // Mark as benchmarked, then promote via the shared promotion authority.
-        // runPromotionPolicy enforces the comparative beats_active gate at the
-        // version-creation boundary, so both autonomous (evo_full_cycle) and
-        // manual (evo_promote) paths are protected by the same policy.
+        // runPromotionPolicy enforces BOTH gates at the version-creation
+        // boundary: the evidence gate (contract C-1 — simulated evidence never
+        // promotes, with or without an active version) and the comparative
+        // beats_active gate. Both the autonomous (evo_full_cycle) and the
+        // manual (evo_promote) path therefore pass through the same policy.
+        //
+        // Consequence of C-1 worth knowing: the simulated-benchmark fallback in
+        // STEP 7 above can no longer yield a promotable candidate. A cycle
+        // whose live benchmark did not produce evidence is now rejected here,
+        // rather than promoted on a synthetic record. That is the ratified
+        // behaviour, not a defect — see docs/CONTRACTS.md.
         await store.updateCandidate(generatedCandidateId, { status: 'benchmarked' })
 
         // Compute the probe version id that runPromotionPolicy will use

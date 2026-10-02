@@ -31,7 +31,8 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           return neutralizeDeep({ ok: false, error: 'candidate ' + candidateId + ' is ' + candidate.status + '; must be benchmarked before promotion' })
         }
         // Verify evidence trust boundary: candidate's latest benchmark must be live.
-        // Simulated evidence cannot promote — this closes the trust boundary gap.
+        // Simulated evidence cannot promote (contract C-1, docs/CONTRACTS.md) —
+        // this closes the trust boundary gap.
         const allBenchmarks = await store.listBenchmarks(500)
         const candidateBenchmarks = allBenchmarks
           .filter(b => b.candidateId === candidateId)
@@ -63,6 +64,10 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
         const { activateVersion, activationState } = await import('../activation/loader.ts')
 
         // Materialize under the planned id first (pre-flight needs the artifact).
+        // The composition base is the currently active version: its complete
+        // artifact file tree is preserved and the candidate's files/tests
+        // overlay it.  Missing candidate files never delete base files.
+        const activeBeforeMaterialize = await store.getActiveVersion()
         let manifest: { toolName: string } | null = null
         try {
           manifest = await materializeArtifact(store.getRoot(), {
@@ -72,7 +77,7 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
             createdAt: new Date().toISOString(),
             status: 'active',
             modules: [candidate.id],
-          }, candidate)
+          }, candidate, { baseVersionId: activeBeforeMaterialize?.id ?? null })
         } catch (error) {
           return neutralizeDeep({ ok: false, error: 'could not materialize the version artifact: ' + String(error instanceof Error ? error.message : error) })
         }
@@ -92,6 +97,12 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
             activationReason: activationState().reason,
           })
         }
+
+        // ── Step 3b: materialization succeeded under the planned id — the
+        // composed artifact (base ∪ candidate) already exists there.
+        // No rollback of base materialization is needed on validate/pre-flight
+        // failure: the planned directory is an unreferenced scratch that will
+        // be removed or overwritten on the next attempt.
 
         // ── Step 4: Execute promotion (version create + candidate status + re-materialize + activation) ──
         const result = await executePromotion(

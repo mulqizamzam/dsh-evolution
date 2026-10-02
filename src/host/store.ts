@@ -287,11 +287,14 @@ export class EvolutionStore {
 
   private benchmarkDir(): string { return join(this.root, 'benchmarks') }
 
-  async addBenchmark(run: Omit<BenchmarkRun, 'id' | 'createdAt'>): Promise<BenchmarkRun> {
+  async addBenchmark(
+    run: Omit<BenchmarkRun, 'id' | 'createdAt'>,
+    createdAt?: string,
+  ): Promise<BenchmarkRun> {
     const full: BenchmarkRun = {
       ...run,
       id: newId(),
-      createdAt: isoDateTime(this.nowFn()),
+      createdAt: createdAt ?? isoDateTime(this.nowFn()),
     }
     await writeJsonAtomic(join(this.benchmarkDir(), `${full.id}.json`), full)
     return full

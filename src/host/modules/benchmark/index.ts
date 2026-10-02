@@ -3,7 +3,7 @@ import type { ModuleDeps } from '../../types.ts'
 import { benchmarkTools } from './tools.ts'
 
 export const name = 'benchmark'
-export const TOOLS = ['evo_benchmark_run', 'evo_benchmark_compare', 'evo_benchmark_live', 'evo_benchmark_ab'] as const
+export const TOOLS = ['evo_benchmark_run', 'evo_benchmark_compare', 'evo_benchmark_live', 'evo_benchmark_ab', 'evo_benchmark_manifest'] as const
 export const readEndpoints = {}
 export const writeEndpoints = {}
 

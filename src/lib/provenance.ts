@@ -7,9 +7,9 @@ import { createHash } from 'node:crypto'
  * that identify *which* sandbox run produced the evidence:
  *   candidateId · version · command · createdAt
  *
- * A tampered record that changes any of the sealed fields (candidateId,
- * version, command, or createdAt) produces a mismatched seal and is rejected
- * at the promotion boundary.
+ * A record whose sealed fields (candidateId, version, command, or
+ * createdAt) no longer match the stored seal produces a consistency
+ * mismatch and is rejected at the promotion boundary.
  *
  * **Scope limitation:** the seal covers execution-context fields only. It
  * does NOT cover the `metrics` blob — an attacker who edits
@@ -21,8 +21,9 @@ import { createHash } from 'node:crypto'
  * scope.
  *
  * The command is the trusted operator-provided shell command executed in
- * the sandbox.  createdAt is set by the store at write time and is
- * immutable once written — a tampered timestamp breaks the seal.
+ * the sandbox.  createdAt is the authoritative timestamp for the record —
+ * it is computed once at write time by the caller and persisted with the
+ * record; the seal is derived from it.
  *
  * Returns a 64-character lowercase hex string.  Callers that need to
  * distinguish "no seal" from "seal present" should check the caller-side
@@ -48,9 +49,9 @@ export function createLiveProvenance(
  *  - The record is live AND its stored provenance is present AND matches
  *    the freshly computed seal.
  *
- * Returns `false` (trust boundary violation) when a live record is
+ * Returns `false` when a live record is
  * missing its provenance seal or the seal does not match — indicating
- * either a code bug or attacker tampering of the persisted JSON.
+ * either a code bug or inconsistency in the persisted JSON.
  */
 export function verifyLiveProvenance(record: {
   mode?: string

@@ -71,3 +71,14 @@ export async function removeFile(path: string): Promise<boolean> {
     return false
   }
 }
+
+/** Read a JSON file directly (no safety wrapper). Throws on failure. */
+export async function readJsonFile<T = unknown>(path: string): Promise<T> {
+  const text = await readFile(path, 'utf8')
+  return JSON.parse(text) as T
+}
+
+/** Write a JSON file directly (no atomicity guarantee). */
+export async function writeJsonFile(path: string, data: unknown): Promise<void> {
+  await writeFile(path, JSON.stringify(data, null, 2) + '\n', 'utf8')
+}

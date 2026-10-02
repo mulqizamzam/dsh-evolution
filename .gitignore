@@ -1,1 +1,25 @@
 node_modules/
+
+# Development probes, scratch files, logs
+.dev/
+scratch-*.ts
+
+# Build artifacts
+lib/artifact-*.js
+lib/caps-*.js
+lib/contain-*.js
+lib/fsx-*.js
+lib/ids-*.js
+lib/manifest-*.js
+lib/outcome-*.js
+lib/provenance-*.js
+lib/dsh-*.js
+lib/rolldown-runtime-*.js
+lib/sandbox-*.js
+lib/sanitize-*.js
+
+# Dev/debug artifacts
+.dev/*.log
+.dev/*.mjs
+.dev/*.ts
+.dev/*.py

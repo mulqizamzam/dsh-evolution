@@ -6,6 +6,7 @@ import { neutralizeDeep } from '../../../lib/sanitize.ts'
 import { containPath } from '../../../lib/contain.ts'
 import { classifyOutcome, evaluateExpectedOutput } from './outcome.ts'
 import { createLiveProvenance } from '../../../lib/provenance.ts'
+import { isoDateTime } from '../../../lib/ids.ts'
 import { getSandbox } from '../sandbox/index.ts'
 import { mkdtemp, rm, mkdir, writeFile, access, lstat, realpath } from 'node:fs/promises'
 import { join, resolve, relative, isAbsolute, sep, dirname } from 'node:path'
@@ -365,7 +366,10 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
           }
           // Compute provenance seal: deterministic fingerprint of the live execution.
           // This makes a forged mode='live' record detectable at the promotion boundary.
-          const createdAt = new Date().toISOString()
+          // The authoritative timestamp is computed ONCE and passed to both the seal
+          // and the store so that verifyLiveProvenance() — which re-derives the seal
+          // from the persisted record — finds an exact match.
+          const createdAt = isoDateTime(new Date())
           const provenance = createLiveProvenance(candidateId, candidate.parentVersion, command, createdAt)
           const record = await store.addBenchmark({
             mode: 'live',
@@ -389,7 +393,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
               + (typeof expectedOutput === 'string' ? ', expectedOutput=(' + expectedOutput.slice(0, 60) + ')' : ''),
               500,
             ),
-          })
+          }, createdAt)
           await store.updateCandidate(candidateId, { status: outcome === 'task-successful' ? 'benchmarked' : 'rejected' })
 
           return neutralizeDeep({
@@ -597,6 +601,10 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             ? `Candidate wins: +${(successRateDelta * 100).toFixed(1)}% success, +${scoreDelta.toFixed(2)} score, ${latencyDeltaMs.toFixed(0)}ms latency delta.`
             : `Verdict: ${verdict}. ` + (rejectionReasons.length > 0 ? rejectionReasons.join('; ') : 'No significant improvement.')
 
+          // Provenance seal for the A/B live benchmark record.
+          // The authoritative timestamp is computed ONCE and passed to both the seal
+          // and the store so that verifyLiveProvenance() finds an exact match.
+          const abRecordCreatedAt = isoDateTime(new Date())
           // Store the AB run
           const abRun = {
             id: candidateId + '-ab-' + Date.now(),
@@ -617,11 +625,9 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             caseResults: allCaseResults,
             passed,
             details: clampText(details, 500),
-            createdAt: new Date().toISOString(),
+            createdAt: abRecordCreatedAt,
           }
 
-          // Provenance seal for the A/B live benchmark record.
-          const abRecordCreatedAt = new Date().toISOString()
           const abRecord = await store.addBenchmark({
             mode: 'live',
             candidateId,
@@ -640,7 +646,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             provenance: createLiveProvenance(candidateId, candidate.parentVersion, command, abRecordCreatedAt) ?? undefined,
             passed,
             details: clampText(details, 500),
-          })
+          }, abRecordCreatedAt)
           await store.updateCandidate(candidateId, { status: passed ? 'benchmarked' : 'rejected' })
 
           return neutralizeDeep({
@@ -659,6 +665,95 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
           if (baselineDir) await rm(baselineDir, { recursive: true, force: true })
           if (candidateDir) await rm(candidateDir, { recursive: true, force: true })
         }
+      },
+    } as never),
+
+    defineTool({
+      name: 'evo_benchmark_manifest',
+      description: 'Execute all benchmark cases declared in a candidate\'s manifest as real sandbox benchmarks. Each case\'s input field is the command to execute; expectedOutput and expectedExitCode are the per-case oracles. Results are persisted as a mode=manifest BenchmarkRun with caseResults. This provides candidate-declared functional evidence only; manifest evidence is diagnostic and does not independently satisfy promotion requirements — run evo_benchmark_live or evo_benchmark_ab for promotion-eligible evidence.',
+      parameters: {
+        type: 'object',
+        properties: {
+          candidateId: { type: 'string', description: 'The candidate id whose manifest cases to execute.' },
+          allowNetwork: { type: 'boolean', description: 'Whether to allow network access in the sandbox. Defaults to false.' },
+          cwd: { type: 'string', description: 'Optional override for the working directory inside the temp dir. Defaults to the temp dir root.' },
+        },
+        required: ['candidateId'],
+      },
+      output: { schema: JSON_OBJECT_OUTPUT, render: RENDER },
+      execute: async (args: never) => {
+        const a = (args ?? {}) as Record<string, unknown>
+        const candidateId = typeof a.candidateId === 'string' ? a.candidateId : ''
+
+        if (!candidateId) {
+          return neutralizeDeep({ ok: false, error: 'candidateId is required' })
+        }
+
+        const candidate = await store.getCandidate(candidateId)
+        if (!candidate) return neutralizeDeep({ ok: false, error: 'no candidate ' + candidateId })
+        if (candidate.status === 'promoted') return neutralizeDeep({ ok: false, error: 'candidate already promoted' })
+
+        // Manifest is persisted at candidates/<id>/manifest.json (written by builder).
+        // CandidateModule does NOT carry a manifest field — read it from disk.
+        const { readCandidateManifest } = await import('./manifest.ts')
+        const manifest = await readCandidateManifest(store.getRoot(), candidateId)
+        const cases = manifest?.benchmarkCases ?? []
+        if (cases.length === 0) {
+          return neutralizeDeep({ ok: false, error: 'candidate has no benchmark cases in manifest' })
+        }
+
+        const { runManifestCases } = await import('./manifest.ts')
+        const result = await runManifestCases(deps, candidate, {
+          allowNetwork: typeof a.allowNetwork === 'boolean' ? a.allowNetwork : undefined,
+          cwd: typeof a.cwd === 'string' ? a.cwd : undefined,
+        })
+
+        if (!result.ok) {
+          return neutralizeDeep({ ok: false, error: result.error, details: result.details })
+        }
+
+        // Persist as a manifest BenchmarkRun with caseResults.
+        // mode='manifest' distinguishes candidate-declared evidence from
+        // operator-controlled live benchmarks. Manifest evidence is
+        // diagnostic — it does not independently satisfy promotion
+        // requirements (promotion authority remains with evo_benchmark_live
+        // / evo_benchmark_ab). The provenance seal is still computed for
+        // tamper-detection on the persisted record.
+        const createdAt = isoDateTime(new Date())
+        const provenance = createLiveProvenance(candidateId, candidate.parentVersion, 'manifest-cases', createdAt)
+
+        const record = await store.addBenchmark({
+          mode: 'manifest',
+          candidateId,
+          version: candidate.parentVersion,
+          baseline: candidate.parentVersion,
+          parentVersion: candidate.parentVersion,
+          runs: result.totalCases,
+          metrics: result.metrics,
+          thresholds: candidate.benchmarkConfig,
+          command: 'manifest-cases',
+          provenance,
+          passed: result.passed,
+          caseResults: result.caseResults,
+          details: clampText(result.details, 500),
+        }, createdAt)
+
+        await store.updateCandidate(candidateId, { status: result.passed ? 'benchmarked' : 'rejected' })
+
+        return neutralizeDeep({
+          ok: true,
+          candidateId,
+          benchmarkRunId: record.id,
+          totalCases: result.totalCases,
+          successfulCases: result.successfulCases,
+          failedCases: result.failedCases,
+          executionFailures: result.executionFailures,
+          metrics: result.metrics,
+          passed: result.passed,
+          caseResults: result.caseResults,
+          details: result.details,
+          evidenceMode: 'manifest',
+        })
       },
     } as never),
   ]

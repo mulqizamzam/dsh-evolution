@@ -44,6 +44,9 @@ export function experienceTools(deps: ModuleDeps): ToolDefinition[] {
           versionId: typeof a.versionId === 'string' && a.versionId !== '' ? a.versionId : undefined,
         }
         const created = await store.addExperience(record)
+        // Enforce retention and count cap using the resolved config limits.
+        const expCfg = deps.cfg().experience
+        void store.pruneExperiences(expCfg.maxRecords, expCfg.retentionDays).catch(() => {})
         return neutralizeDeep(created)
       },
     } as never),

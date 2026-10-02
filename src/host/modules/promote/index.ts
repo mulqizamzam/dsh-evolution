@@ -11,12 +11,22 @@ export const readEndpoints = {}
 export const writeEndpoints = {}
 
 /**
- * Evaluate the comparative `beats_active` gate for a candidate against the
- * currently active version. Returns the captured active metrics (for
- * provenance) on success, or null when the gate is skipped (first version
- * or no comparable live benchmark).
+ * Evaluate the promotion policy for a candidate. This is the SINGLE policy
+ * authority for every promotion path — `evo_promote` and `evo_full_cycle` both
+ * route through here, so a rule enforced here is enforced everywhere.
  *
- * Returns { ok: false, error } when the candidate fails the gate.
+ * Two gates, in order:
+ *
+ *  1. **Evidence gate** — a candidate whose latest benchmark record has
+ *     `mode === 'simulated'` is rejected unconditionally, including when no
+ *     active version exists. Ratified as contract C-1 in `docs/CONTRACTS.md`.
+ *  2. **Comparative gate (`beats_active`)** — the candidate's live metrics must
+ *     strictly beat the active version's. Returns the captured active metrics
+ *     (for provenance) on success, or `undefined` when the gate is skipped
+ *     because there is no comparable active baseline (first version, or no
+ *     benchmark on the active module). Tie with active = reject (monotonicity).
+ *
+ * Returns { ok: false, error } when the candidate fails either gate.
  *
  * This is a PURE evaluation: it reads store state and returns a decision
  * without creating any Version, updating any Candidate, or touching
@@ -56,9 +66,16 @@ export async function evaluatePromotionPolicy(
     .sort((a, b) => a.createdAt > b.createdAt ? -1 : 1)
   const candidateLatest = candidateBenchmarks[0]
 
-  // Reject: candidate's best evidence is simulated while active version has live evidence.
-  // A candidate with only simulated evidence cannot promote when a live-active baseline exists.
-  if (capturedActiveMetrics && candidateLatest && candidateLatest.mode === 'simulated') {
+  // Reject: candidate's most recent evidence is simulated.
+  //
+  // Per contract C-1 (docs/CONTRACTS.md), simulated evidence is rejected
+  // UNCONDITIONALLY — including when no active version exists. The fresh-root
+  // case is precisely why: without this the very first promoted version, which
+  // becomes the baseline every later beats_active comparison is measured
+  // against, would be installed from evidence that was never executed.
+  //
+  // This condition is deliberately not gated on `capturedActiveMetrics`.
+  if (candidateLatest && candidateLatest.mode === 'simulated') {
     return {
       ok: false,
       error: `promotion rejected: candidate has only simulated evidence (mode=simulated); run evo_benchmark_live or evo_benchmark_ab to produce execution evidence before promoting`,
@@ -85,8 +102,8 @@ export async function evaluatePromotionPolicy(
           return {
             ok: false,
             error: candidateLatest.provenance
-              ? 'benchmark provenance seal mismatch: evidence may have been tampered'
-              : 'live benchmark provenance seal missing: record may have been forged; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence',
+              ? 'provenance consistency mismatch: stored seal does not match the record fields; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence'
+              : 'live benchmark provenance seal missing: no provenance on record; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence',
           }
         }
       }
@@ -125,6 +142,13 @@ export async function executePromotion(
   }
   const { materializeArtifact, validateArtifact } = await import('../activation/artifact.ts')
   const { refreshActivation } = await import('../activation/loader.ts')
+
+  // ── Resolve the composition base BEFORE any store mutation ──
+  // The candidate is promoted on top of the currently active version (A).
+  // Reading the active version before createVersion guarantees A is the base
+  // even for the re-materialization fallback that runs AFTER createVersion.
+  const baseVersionForComposition = await store.getActiveVersion()
+  const baseVersionId: string | null | undefined = baseVersionForComposition?.id
 
   // ── Safe ordering: materialize + validate artifact BEFORE any store mutation ──
   // createVersion writes to persisted state (marks old active as rolled-back,
@@ -165,7 +189,7 @@ export async function executePromotion(
     }
     const { rm } = await import('node:fs/promises')
     await rm(join(store.getRoot(), 'versions', probeVersion.id), { recursive: true, force: true })
-    await materializeArtifact(store.getRoot(), probeVersion, candidate)
+    await materializeArtifact(store.getRoot(), probeVersion, candidate, { baseVersionId })
     const validation = await validateArtifact(store.getRoot(), probeVersion.id)
     if (!validation.valid) {
       // Clean up the orphaned artifact directory so it does not leak disk space.
@@ -192,7 +216,7 @@ export async function executePromotion(
   const expectedArtifactPath = join(store.getRoot(), 'versions', version.id)
   const artifactAtRealId = await access(join(expectedArtifactPath, 'manifest.json')).then(() => true).catch(() => false)
   if (!artifactAtRealId && version.id !== plannedVersionId) {
-    await materializeArtifact(store.getRoot(), version, candidate)
+    await materializeArtifact(store.getRoot(), version, candidate, { baseVersionId })
   }
   await refreshActivation(deps)
 
