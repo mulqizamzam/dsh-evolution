@@ -232,10 +232,25 @@ export function validateCandidateFileSet(fileSet: CandidateFileSet): CandidateVa
  */
 function toFileArray(value: unknown): Array<{ path: string; content: string }> {
   if (Array.isArray(value)) {
-    return value
-      .filter((entry): entry is Record<string, unknown> => entry !== null && typeof entry === 'object')
-      .filter(entry => typeof entry.path === 'string')
-      .map(entry => ({ path: String(entry.path), content: typeof entry.content === 'string' ? entry.content : '' }))
+    const out: Array<{ path: string; content: string }> = []
+    for (const entry of value) {
+      if (entry === null || typeof entry !== 'object') continue
+      const e = entry as Record<string, unknown>
+      if (typeof e.path === 'string') {
+        out.push({ path: e.path, content: typeof e.content === 'string' ? e.content : '' })
+        continue
+      }
+      // A path whose VALUE is an object, observed live in a `files` ARRAY:
+      // {"path":{"src/index.ts":"IGNORE"},"content":""}. Dropping this entry
+      // silently is what turned one model quirk into "no parseable JSON file
+      // set" — the first entry was valid but the array lost its identity.
+      if (e.path !== null && typeof e.path === 'object' && !Array.isArray(e.path)) {
+        for (const [k, v] of Object.entries(e.path as Record<string, unknown>)) {
+          if (typeof v === 'string') out.push({ path: k, content: v })
+        }
+      }
+    }
+    return out
   }
   if (value !== null && typeof value === 'object') {
     const obj = value as Record<string, unknown>
@@ -243,6 +258,15 @@ function toFileArray(value: unknown): Array<{ path: string; content: string }> {
     // the keys 'path' and 'content' as two filenames.
     if (typeof obj.path === 'string') {
       return [{ path: obj.path, content: typeof obj.content === 'string' ? obj.content : '' }]
+    }
+    // A path whose VALUE is an object is observed live: {"path":
+    // {"src/index.ts":"IGNORE"}, "content":""}. The nested keys are the real
+    // paths; recover them rather than dropping the whole candidate.
+    if (obj.path !== null && typeof obj.path === 'object' && !Array.isArray(obj.path)) {
+      const recovered = Object.entries(obj.path as Record<string, unknown>)
+        .filter(([, v]) => typeof v === 'string')
+        .map(([k, v]) => ({ path: k, content: String(v) }))
+      if (recovered.length > 0) return recovered
     }
     return Object.entries(obj)
       .filter(([, v]) => typeof v === 'string')
@@ -374,10 +398,56 @@ function repairInvalidEscapes(text: string): string {
 }
 
 /**
+ * Repair mismatched brackets in an otherwise-parsable document.
+ *
+ * Measured live: a response truncated MID-document leaves a `{` open at the
+ * point where a `]` arrives (`..."content":"..." ]`) — the closer is owed
+ * THERE, not appended at the end, which is why a naive append-only repair
+ * still failed to parse.
+ *
+ * String-aware, so braces inside a file's content never affect the count.
+ * On a closer it closes any inner frames left open above the matching opener
+ * first (they are owed before this closer can land), and drops a closer with
+ * no matching opener at all — an extra one can only be spurious, and keeping
+ * it makes the document parse as "trailing content after JSON".
+ *
+ * A response cut in the middle of a string is missing real content: closing it
+ * would invent data, so it is returned unchanged and the caller falls through
+ * to the next attempt.
+ */
+function repairBrackets(text: string): string {
+  const stack: string[] = []
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (const ch of text) {
+    if (inString) {
+      out += ch
+      if (escaped) { escaped = false; continue }
+      if (ch === '\\') { escaped = true; continue }
+      if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; out += ch; continue }
+    if (ch === '{') { stack.push('}'); out += ch; continue }
+    if (ch === '[') { stack.push(']'); out += ch; continue }
+    if (ch !== '}' && ch !== ']') { out += ch; continue }
+    const idx = stack.lastIndexOf(ch)
+    if (idx === -1) continue // unmatched extra closer: drop it
+    for (let k = stack.length - 1; k > idx; k -= 1) out += stack[k]!
+    out += ch
+    stack.length = idx
+  }
+  if (inString) return text
+  while (stack.length > 0) out += stack.pop()!
+  return out
+}
+
+/**
  * Extract a candidate file set from a model response. Models wrap JSON in
  * prose or fences, so try, in order: the raw text, every fenced block, and the
- * outermost brace-balanced span — each with and without trailing-comma repair
- * and with and without invalid-escape repair.
+ * outermost brace-balanced span — each with and without trailing-comma repair,
+ * invalid-escape repair, and bracket-closing repair.
  */
 export function parseFileSetFromLLMResponse(content: string): CandidateFileSet {
   const attempts: string[] = []
@@ -394,15 +464,24 @@ export function parseFileSetFromLLMResponse(content: string): CandidateFileSet {
     attempts.push(content.slice(firstBrace, lastBrace + 1))
   }
 
+  // Repair ladder, cheapest and least-invasive first. Bracket-closing is last
+  // because it is the only variant that infers something the model did not
+  // send, so an intact response must never depend on it.
+  const repairs = [
+    (s: string) => s,
+    stripTrailingCommas,
+    repairInvalidEscapes,
+    (s: string) => repairInvalidEscapes(stripTrailingCommas(s)),
+    repairBrackets,
+    (s: string) => repairBrackets(stripTrailingCommas(s)),
+    (s: string) => repairBrackets(repairInvalidEscapes(s)),
+    (s: string) => repairBrackets(repairInvalidEscapes(stripTrailingCommas(s))),
+  ]
+
   for (const attempt of attempts) {
-    for (const variant of [
-      attempt,
-      stripTrailingCommas(attempt),
-      repairInvalidEscapes(attempt),
-      repairInvalidEscapes(stripTrailingCommas(attempt)),
-    ]) {
+    for (const repair of repairs) {
       try {
-        const parsed = JSON.parse(variant)
+        const parsed = JSON.parse(repair(attempt))
         const fileSet = normalizeFileSet(parsed)
         if (fileSet.files.length > 0) return fileSet
       } catch {
@@ -482,12 +561,38 @@ export function builderTools(deps: ModuleDeps): ToolDefinition[] {
           return neutralizeDeep({ ok: false, error: 'LLM call failed: ' + (error instanceof Error ? error.message : String(error)) })
         }
 
-        // Parse response
+        // Parse response. On a parse failure, the model emitted something that
+        // no amount of string repair can make valid — observed live: a JS
+        // expression where a JSON string was required ("src/index.ts".replace(
+        // …)). Retrying once with the original prompt is the robust path: the
+        // backend rotates, so a second call often produces a clean document.
         let fileSet: CandidateFileSet
+        let lastParseError: string = ''
         try {
           fileSet = parseFileSetFromLLMResponse(llmResponse.content)
         } catch (error) {
-          return neutralizeDeep({ ok: false, error: 'Failed to parse LLM response: ' + (error instanceof Error ? error.message : String(error)) })
+          lastParseError = error instanceof Error ? error.message : String(error)
+          // Retry once with the same prompt.
+          let retry: { content: string; usage: HostUsage; rescuedFromReasoning: boolean }
+          try {
+            retry = await callHostLLM(deps, systemPrompt, userPrompt, {
+              provider: a.providerOverride as string | undefined,
+              model: a.modelOverride as string | undefined,
+            })
+          } catch (rErr) {
+            return neutralizeDeep({ ok: false, error: 'LLM retry failed: ' + (rErr instanceof Error ? rErr.message : String(rErr)) })
+          }
+          try {
+            fileSet = parseFileSetFromLLMResponse(retry.content)
+          } catch (rErr) {
+            const retryMsg = rErr instanceof Error ? rErr.message : String(rErr)
+            return neutralizeDeep({
+              ok: false,
+              error: 'Failed to parse LLM response (both attempts failed)',
+              firstAttempt: lastParseError,
+              retryAttempt: retryMsg,
+            })
+          }
         }
 
         // Validate

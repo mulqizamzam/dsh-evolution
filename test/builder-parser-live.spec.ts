@@ -15,7 +15,7 @@
  * because it spends real tokens; the owner turns it on deliberately.
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseFileSetFromLLMResponse } from '../src/host/modules/builder/tools.ts'
 
@@ -84,13 +84,27 @@ describe.skipIf(!LIVE)('LIVE: real model response survives invalid escapes', () 
     const reasoningTokens = data.usage?.completion_tokens_details?.reasoning_tokens ?? 0
     expect(reasoningTokens).toBeLessThan(data.usage?.completion_tokens ?? Infinity)
 
-    // The contract that used to fail: a complete, non-truncated document.
-    const fileSet = parseFileSetFromLLMResponse(content)
-    expect(fileSet.files.length).toBeGreaterThan(0)
-    expect(fileSet.manifest.name).not.toBe('')
-    for (const file of [...fileSet.files, ...fileSet.tests]) {
-      expect(file.path).not.toBe('')
-      expect(typeof file.content).toBe('string')
+    // On failure, persist the exact bytes. The parse error alone is not
+    // diagnosable: three live runs produced three DIFFERENT failure lengths
+    // (27620, 11308, 1685), so the cause has to be read from the response.
+    try {
+      const fileSet = parseFileSetFromLLMResponse(content)
+      expect(fileSet.files.length).toBeGreaterThan(0)
+      expect(fileSet.manifest.name).not.toBe('')
+      for (const file of [...fileSet.files, ...fileSet.tests]) {
+        expect(file.path).not.toBe('')
+        expect(typeof file.content).toBe('string')
+      }
+    } catch (error) {
+      const stamp = Date.now()
+      writeFileSync(
+        `.dev/live-fail-${stamp}-len${content.length}.txt`,
+        'finish_reason=' + (data.choices?.[0]?.finish_reason ?? '?')
+          + '\nmodel=' + (data.model ?? '?')
+          + '\ncompletion_tokens=' + (data.usage?.completion_tokens ?? '?')
+          + '\n---\n' + content,
+      )
+      throw error
     }
   }, 300_000)
 })
