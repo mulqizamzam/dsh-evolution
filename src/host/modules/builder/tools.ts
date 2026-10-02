@@ -575,8 +575,67 @@ export function parseFileSetFromLLMResponse(content: string): CandidateFileSet {
 
 // ── Prompts ──
 
+/**
+ * Generation prompt, tightened against the failure shapes measured live.
+ *
+ * Measured over 20 live runs against the rotating 9Router backends
+ * (baseline, before this change): ~15% parse failures. Reading the captured
+ * bytes showed THREE distinct causes, and only one of them was "bad JSON":
+ *
+ *   1. finish_reason=length at 8192/8192 tokens (2 of 3 captured failures).
+ *      The model spent the whole budget and was cut off MID-STRING. Not a
+ *      JSON defect at all — a SIZE defect. The original prompt never said
+ *      how big the answer should be, so a backend that elaborated tests and
+ *      JSDoc ran out of room. Hence the explicit budget below.
+ *   2. structural drift (1 of 3): the model emitted a different shape, e.g.
+ *      `{"name":"compareIds","signature":...}` where a {path, content}
+ *      entry was required.
+ *   3. genuinely malformed JSON: an unescaped `"` inside a content string.
+ *
+ * So the rules below are ordered by what the measurements said mattered:
+ * size first, shape second, escaping third.
+ */
 function buildSystemPrompt(): string {
-  return 'You are an expert DSH plugin developer. Generate a candidate improvement module.\n\nYou MUST return a single JSON object with this exact shape:\n{\n  "manifest": {\n    "name": "short-name",\n    "version": "1.0.0",\n    "type": "<one of: policy, workflow, skill, routing-rule, verification-strategy, retry-strategy, tool-selection-rule>",\n    "description": "what this module does",\n    "entryPoint": "src/index.ts",\n    "benchmarkCases": [\n      {\n        "id": "case-1",\n        "description": "test case description",\n        "input": "the test input",\n        "expectedOutput": "regex pattern or exact string",\n        "expectedExitCode": 0,\n        "timeoutMs": 10000,\n        "successCriteria": "what success looks like"\n      }\n    ]\n  },\n  "files": [\n    { "path": "src/index.ts", "content": "..." }\n  ],\n  "tests": [\n    { "path": "test/index.spec.ts", "content": "..." }\n  ]\n}\n\nRULES:\n- Files MUST use .ts or .js extension only\n- Paths MUST be relative (no leading /)\n- No path traversal (no ../)\n- Include at least one benchmark case\n- Include at least one test file\n- The module must be self-contained\n- Do NOT attempt to modify DSH core or other plugins\n- The entryPoint must exist in the files array\n\nReturn ONLY the JSON object. No markdown. No explanation.'
+  return [
+    'You generate one candidate improvement module for DSH, returned as a single JSON object.',
+    '',
+    'OUTPUT BUDGET — read this first:',
+    'The entire response must stay UNDER 3000 characters.',
+    'Write ONE source file and ONE test file. Keep each under 25 lines.',
+    'No JSDoc blocks, no banner comments, no extra helper files, no second',
+    'test file, no "type"/"interface" ceremony beyond what the code needs.',
+    'A terse correct module beats a thorough one that gets cut off mid-string.',
+    '',
+    'The response must be EXACTLY this JSON shape and nothing else:',
+    '{"manifest":{"name":"kebab-case-name","version":"1.0.0","type":"verification-strategy",',
+    '"description":"one short sentence","entryPoint":"src/index.ts",',
+    '"benchmarkCases":[{"id":"case-1","description":"d","input":"i",',
+    '"expectedOutput":"o","expectedExitCode":0,"timeoutMs":10000,',
+    '"successCriteria":"s"}]},',
+    '"files":[{"path":"src/index.ts","content":"..."}],',
+    '"tests":[{"path":"test/index.spec.ts","content":"..."}]}',
+    '',
+    'HARD RULES — each one is a failure shape observed in real responses:',
+    '1. Output the JSON object and NOTHING else. No prose before or after it.',
+    '   Do not restate these rules: a stray quote in the restatement is enough',
+    '   to end the JSON string early.',
+    '2. Every "content" value is a plain JSON string. Never embed a JavaScript',
+    '   expression, a .replace() call, or template-literal syntax there — a',
+    '   real response did, and it is unrecoverable.',
+    '3. Inside a content string, every double quote MUST be written as \\" and',
+    '   every backslash as \\\\ . An unescaped quote ends the string early.',
+    '4. files and tests are arrays of objects with EXACTLY the keys "path" and',
+    '   "content" (both strings). No extra keys, no nested objects, no',
+    '   signature/type/name descriptors.',
+    '5. No trailing commas, no comments, no duplicate keys anywhere.',
+    '6. Paths are relative, start with src/ or test/, end in .ts, and contain',
+    '   neither ../ nor a leading /.',
+    '7. manifest.type is exactly one of: policy, workflow, skill, routing-rule,',
+    '   verification-strategy, retry-strategy, tool-selection-rule.',
+    '8. manifest.entryPoint names one of the paths in "files".',
+    '',
+    'Respond now with only the JSON object.',
+  ].join('\n')
 }
 
 function buildUserPrompt(patterns: Pattern[], experiences: ExperienceRecord[], parentVersion: string): string {
