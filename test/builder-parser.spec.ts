@@ -213,6 +213,64 @@ describe('parseFileSetFromLLMResponse — single file object', () => {
 })
 
 /**
+ * Found by a LIVE run (mimo-v2.6-flash-free): the second element of a `files`
+ * ARRAY carried an object as its path —
+ *   {"path":{"src/index.ts":"IGNORE"},"content":""}
+ * The old array branch filtered on `typeof entry.path === 'string'`, so that
+ * entry was dropped. With only the placeholder remaining, normalization
+ * yielded no parseable JSON file set — one model quirk discarded a valid
+ * module.
+ */
+describe('parseFileSetFromLLMResponse — object-valued path in array', () => {
+  it('keeps the valid entries when one array element has an object-valued path', () => {
+    const body = JSON.stringify({
+      manifest: VALID.manifest,
+      files: [
+        { path: 'src/index.ts', content: 'real content' },
+        { path: { 'src/index.ts': 'IGNORE' }, content: '' },
+      ],
+      tests: [],
+    })
+    const result = parseFileSetFromLLMResponse(body)
+    expect(result.files.length).toBeGreaterThan(0)
+    expect(result.files.some(f => f.path === 'src/index.ts')).toBe(true)
+  })
+
+  it('recovers paths from an object-valued path entry inside an array', () => {
+    const body = JSON.stringify({
+      manifest: VALID.manifest,
+      files: [{ path: { 'src/a.ts': 'aaa' }, content: 'ignored' }],
+      tests: [],
+    })
+    const result = parseFileSetFromLLMResponse(body)
+    expect(result.files).toEqual([{ path: 'src/a.ts', content: 'aaa' }])
+  })
+
+  it('recovers paths from an object-valued path on a lone object', () => {
+    const body = JSON.stringify({
+      manifest: VALID.manifest,
+      files: { path: { 'src/b.ts': 'bbb' }, content: 'ignored' },
+      tests: [],
+    })
+    const result = parseFileSetFromLLMResponse(body)
+    expect(result.files).toEqual([{ path: 'src/b.ts', content: 'bbb' }])
+  })
+
+  it('drops an array element whose path object is not recoverable', () => {
+    const body = JSON.stringify({
+      manifest: VALID.manifest,
+      files: [
+        { path: 'src/index.ts', content: 'good' },
+        { path: { nested: { too: 'deep' } }, content: 'bad' },
+      ],
+      tests: [],
+    })
+    const result = parseFileSetFromLLMResponse(body)
+    expect(result.files).toEqual([{ path: 'src/index.ts', content: 'good' }])
+  })
+})
+
+/**
  * Found by a LIVE run: with reasoning pinned off the model produced a COMPLETE
  * document (finish_reason "stop", no truncation) whose TypeScript payload
  * contained `\order?` inside a JSON string. `\o` is not a legal JSON escape, so
