@@ -503,6 +503,43 @@ function diagnoseResponseShape(response: string): string | null {
 }
 
 /**
+ * Slice out the first COMPLETE JSON object using a string-aware brace scan.
+ *
+ * Measured live: a response ended `..."}]}\n  }\n}` — a valid object followed by
+ * two stray closers. `content.indexOf('{')` … `content.lastIndexOf('}')`
+ * therefore spans PAST the end of the object, and JSON.parse rejects the whole
+ * thing with "Unexpected non-whitespace character after JSON at position
+ * 5662". Scanning for the frame that actually closes at depth 0 recovers the
+ * real object (measured: parses with 2 files).
+ *
+ * Returns null when the document is never balanced, which is the truncation
+ * case the pre-flight gate reports instead.
+ */
+function extractFirstCompleteObject(text: string): string | null {
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  let inString = false
+  let escaped = false
+  let depth = 0
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i]!
+    if (inString) {
+      if (escaped) { escaped = false; continue }
+      if (ch === '\\') { escaped = true; continue }
+      if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === '{') depth += 1
+    else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return null
+}
+
+/**
  * Extract a candidate file set from a model response.
  */
 export function parseFileSetFromLLMResponse(content: string): CandidateFileSet {
@@ -518,6 +555,14 @@ export function parseFileSetFromLLMResponse(content: string): CandidateFileSet {
   const lastBrace = content.lastIndexOf('}')
   if (firstBrace >= 0 && lastBrace > firstBrace) {
     attempts.push(content.slice(firstBrace, lastBrace + 1))
+  }
+
+  // A string-aware brace scan for the first COMPLETE object. Measured live:
+  // a valid object followed by two stray closers — the slice above runs
+  // past the object's end and JSON.parse rejects it; this recovers it.
+  const complete = extractFirstCompleteObject(content)
+  if (complete !== null && !attempts.includes(complete)) {
+    attempts.push(complete)
   }
 
   // PRE-FLIGHT: reject an unrepairable document before running the repair
