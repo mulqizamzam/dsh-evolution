@@ -195,3 +195,4 @@ npm test
 | `benchmark.maxRuns` | 10 | Maximum benchmark runs |
 | `benchmark.improvementThreshold` | 0.05 | Required improvement for promotion |
 | `benchmark.regressionThreshold` | 0.10 | Allowed regression before rejection |
+| `evolution.maxCyclesPerProcess` | 3 | Hard cap on autonomous cycles per host process (loop safety); a failed (exception) cycle no longer consumes a slot |
