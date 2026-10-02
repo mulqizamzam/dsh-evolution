@@ -1,10 +1,14 @@
 /**
- * LIVE proof that the invalid-escape repair actually recovers a real model
+ * LIVE proof that parseFileSetFromLLMResponse recovers a REAL model
  * response, not just a hand-written fixture.
  *
- * The fixture in builder-parser.spec.ts pins the parser contract. This file
- * pins the end-to-end claim: a 9Router response containing an illegal JSON
- * escape parses into a usable candidate.
+ * The fixture in builder-parser.spec.ts pins the parser contract (including
+ * the illegal-escape repair). This file pins the end-to-end claim: a live
+ * 9Router response parses into a usable candidate.
+ *
+ * Note: whether an illegal escape APPEARS in any given run is model-dependent
+ * (a probe of 2 live runs found 0). The escape repair is therefore
+ * defence-in-depth, exercised by the pinned fixture in builder-parser.spec.ts.
  *
  * Skips itself when 9Router or its key is unavailable, so the suite stays
  * runnable offline. Runs only in the plain environment (`DSH_EVO_LIVE=1`)
@@ -39,7 +43,7 @@ async function resolveKey(): Promise<string | null> {
 }
 
 describe.skipIf(!LIVE)('LIVE: real model response survives invalid escapes', () => {
-  it('parses a complete model response that contains an illegal JSON escape', async () => {
+  it('parses a complete live model response (defence-in-depth: also survives illegal escapes if they appear)', async () => {
     const apiKey = await resolveKey()
     if (apiKey === null) {
       throw new Error('no 9Router key available — cannot run the live proof')
