@@ -378,4 +378,17 @@ describe('parseFileSetFromLLMResponse — invalid escape repair', () => {
     const result = parseFileSetFromLLMResponse(badUnicode)
     expect(result.files[0]!.content).toContain('u00zz')
   })
+
+  it('repairs an illegal escape without destroying a valid \\\\ pair elsewhere in the document', () => {
+    // The repair emitted only the first half of a valid `\\` pair and advanced
+    // by one, so the second backslash was re-read as a fresh escape lead and
+    // the following `d` — not a JSON escape — was doubled into `\\d`, which
+    // JSON.parse rejects. Measured consequence: one offending escape cost the
+    // entire candidate whenever the payload also carried ordinary backslash
+    // content such as a regex, and no rung of the ladder could recover it.
+    const mixed = '{"manifest":' + JSON.stringify(VALID.manifest)
+      + ',"files":[{"path":"src/index.ts","content":"' + '\\order and /\\\\d+/' + '"}]}'
+    const result = parseFileSetFromLLMResponse(mixed)
+    expect(result.files[0]!.content).toBe('\\order and /\\d+/')
+  })
 })

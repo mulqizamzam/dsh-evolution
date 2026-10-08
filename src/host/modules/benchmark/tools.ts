@@ -370,7 +370,12 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
           // and the store so that verifyLiveProvenance() — which re-derives the seal
           // from the persisted record — finds an exact match.
           const createdAt = isoDateTime(new Date())
-          const provenance = createLiveProvenance(candidateId, candidate.parentVersion, command, createdAt)
+          // Seal exactly the command that is persisted below. Sealing the
+          // unclamped command while storing clampText(command, 500) made every
+          // live record longer than 500 chars permanently unpromotable,
+          // because verifyLiveProvenance() re-derives the seal from the record.
+          const persistedCommand = clampText(command, 500)
+          const provenance = createLiveProvenance(candidateId, candidate.parentVersion, persistedCommand, createdAt)
           const record = await store.addBenchmark({
             mode: 'live',
             candidateId,
@@ -380,7 +385,7 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             runs: 1,
             metrics: liveMetrics,
             thresholds: candidate.benchmarkConfig,
-            command: clampText(command, 500),
+            command: persistedCommand,
             expectedExitCode,
             expectedOutput,
             provenance,
@@ -628,6 +633,8 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             createdAt: abRecordCreatedAt,
           }
 
+          // Same rule as the single-run path: the seal covers the stored value.
+          const persistedAbCommand = clampText(command, 500)
           const abRecord = await store.addBenchmark({
             mode: 'live',
             candidateId,
@@ -640,10 +647,10 @@ export function benchmarkTools(deps: ModuleDeps): ToolDefinition[] {
             comparison: abRun.comparison,
             caseResults: allCaseResults,
             thresholds: candidate.benchmarkConfig,
-            command: clampText(command, 500),
+            command: persistedAbCommand,
             expectedExitCode,
             expectedOutput,
-            provenance: createLiveProvenance(candidateId, candidate.parentVersion, command, abRecordCreatedAt) ?? undefined,
+            provenance: createLiveProvenance(candidateId, candidate.parentVersion, persistedAbCommand, abRecordCreatedAt) ?? undefined,
             passed,
             details: clampText(details, 500),
           }, abRecordCreatedAt)

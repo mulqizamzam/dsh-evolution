@@ -47,24 +47,20 @@ export async function evaluatePromotionPolicy(
   const activeBeforePromote = await store.getActiveVersion()
   let capturedActiveMetrics: import('../../types.ts').BenchmarkMetrics | undefined
   let activeModuleBenchRecord: import('../../types.ts').BenchmarkRun | undefined
+  // A missing record and a record outside listBenchmarks()'s newest-N window
+  // must not look alike: the gates below are nested behind
+  // `capturedActiveMetrics`, so a windowed lookup silently disabled both the
+  // comparative check and the provenance-seal check once the state root grew.
   if (activeBeforePromote?.modules?.length) {
     const activeModuleId = activeBeforePromote.modules[0]
-    const allBenches = await store.listBenchmarks(500)
-    const activeModuleBenches = allBenches
-      .filter(b => b.candidateId === activeModuleId)
-      .sort((x, y) => x.createdAt > y.createdAt ? -1 : 1)
-    activeModuleBenchRecord = activeModuleBenches[0]
+    activeModuleBenchRecord = (await store.listBenchmarksByCandidate(activeModuleId))[0]
     if (activeModuleBenchRecord) {
       capturedActiveMetrics = activeModuleBenchRecord.metrics
     }
   }
 
   // Find the candidate's latest live benchmark metrics.
-  const allCandidateBenchmarks = await store.listBenchmarks(500)
-  const candidateBenchmarks = allCandidateBenchmarks
-    .filter(b => b.candidateId === candidate.id)
-    .sort((a, b) => a.createdAt > b.createdAt ? -1 : 1)
-  const candidateLatest = candidateBenchmarks[0]
+  const candidateLatest = (await store.listBenchmarksByCandidate(candidate.id))[0]
 
   // Reject: candidate's most recent evidence is simulated.
   //

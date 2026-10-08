@@ -35,7 +35,8 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --exclude test/real-agnes-experiment.spec.ts",
+    "test:live": "vitest run test/real-agnes-experiment.spec.ts"
   },
   "dependencies": {
     "schemastery": "^3.18.0"

@@ -391,7 +391,12 @@ function repairInvalidEscapes(text: string): string {
       out += '\\\\'
       continue
     }
-    if (VALID_JSON_ESCAPES.has(next)) { out += ch; continue }
+    // Consume the whole escape pair. Emitting only `ch` and advancing by one
+    // re-read the second backslash of a valid `\\` pair as a fresh escape lead,
+    // so the character after it was doubled into an illegal escape (`\\d` became
+    // `\\\d`) and the whole document stopped parsing. Mirrors the `\u` branch
+    // above, which already skips its full sequence.
+    if (VALID_JSON_ESCAPES.has(next)) { out += ch + next; i += 1; continue }
     out += '\\\\'
   }
   return out

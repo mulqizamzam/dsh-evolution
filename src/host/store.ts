@@ -311,6 +311,28 @@ export class EvolutionStore {
     return runs
   }
 
+  /**
+   * Every benchmark record for one candidate, newest first.
+   *
+   * `listBenchmarks` returns only the newest `limit` files by mtime, so once a
+   * state root holds more records than the window it silently stops reporting
+   * older ones. Promotion evidence must not depend on that window: a hidden
+   * baseline record makes the policy gate read as "no baseline exists" and
+   * skip the comparative and seal checks entirely.
+   */
+  async listBenchmarksByCandidate(candidateId: string): Promise<BenchmarkRun[]> {
+    const files = await listDir(this.benchmarkDir(), Number.MAX_SAFE_INTEGER)
+    const runs: BenchmarkRun[] = []
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue
+      const data = await readJsonSafe(join(this.benchmarkDir(), f))
+      if (data && typeof data === 'object' && (data as BenchmarkRun).candidateId === candidateId) {
+        runs.push(data as BenchmarkRun)
+      }
+    }
+    return runs.sort((x, y) => (x.createdAt > y.createdAt ? -1 : 1))
+  }
+
   // ── Versions ──
 
   private versionDir(): string { return join(this.root, 'versions') }
