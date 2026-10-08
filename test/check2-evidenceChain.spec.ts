@@ -68,7 +68,7 @@ describe('CHECK 2: Fresh pattern evidence lineage', () => {
     await store.addPattern({
       type: 'failure',
       evidence: 'FACT',
-      description: 'Recurring signature observed 5 times: timeout error',
+      description: 'Recurring signature: timeout error',
       occurrences: 5,
       evidenceIds: [], // old empty state
       confidence: 0.8,

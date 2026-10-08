@@ -396,19 +396,20 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
 
     // If the active version is degraded, prepend a synthetic degradation
     // pattern so downstream stages can react to it independently of the
-    // recurrence-based patterns.  Deduplication is handled by the deterministic
-    // description template inside detectDegradationContext.
+    // recurrence-based patterns. `ensureSyntheticPattern` reuses a recorded
+    // pattern when the same description already exists, so this path never
+    // writes a second copy of one signal.
     const degradedCtx = await detectDegradationContext(deps)
     if (degradedCtx) {
-      const synthPattern = await deps.store.addPattern({
-        type: 'failure',
-        evidence: 'FACT',
-        description: degradedCtx.description,
-        occurrences: degradedCtx.total,
-        evidenceIds: degradedCtx.evidenceIds,
-        confidence: Math.min(0.95, 0.5 + degradedCtx.total * 0.02),
-      })
-      fresh.unshift({ id: synthPattern.id, confidence: synthPattern.confidence })
+      const synthId = await ensureSyntheticPattern(deps, degradedCtx)
+      if (synthId !== null) {
+        fresh.unshift({ id: synthId, confidence: Math.min(0.95, 0.5 + degradedCtx.total * 0.02) })
+      } else {
+        // Already recorded by an earlier cycle: reuse it rather than write a
+        // second copy of the same signal.
+        const existing = (await deps.store.listPatterns(500)).find(p => p.description === degradedCtx.description)
+        if (existing) fresh.unshift({ id: existing.id, confidence: existing.confidence })
+      }
       deps.log('auto-cycle: degradation signal detected for ' + degradedCtx.versionId)
     }
 

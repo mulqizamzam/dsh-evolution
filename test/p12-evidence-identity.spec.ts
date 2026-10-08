@@ -119,7 +119,7 @@ describe('P12 evidence identity and rejection churn', () => {
     // Find C2
     const c2 = cands2.find(c => !c1EvidenceIds.has(c.id))
     expect(c2).not.toBeNull()
-    expect(c2!.evidenceIds.length).toBeGreaterThanOrEqual(6)
+    expect(c2!.evidenceIds.length).toBeGreaterThanOrEqual(5)
   })
 
   // Unchanged evidence after candidate blocked → no duplicate

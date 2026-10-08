@@ -85,7 +85,9 @@ function toLossless(value: unknown, ancestors: Set<object>): unknown {
     // DROP, never emit `undefined`: one undefined property invalidates the
     // host's lossless-JSON snapshot for the entire result.
     if (converted === DROP) continue
-    out[key] = converted
+    // Object keys carry user text just like values: strip brace pairs from
+    // them too, otherwise `{{`/`}}` in a metadata key survives neutralizeDeep.
+    out[neutralize(key)] = converted
   }
   ancestors.delete(object)
   return out

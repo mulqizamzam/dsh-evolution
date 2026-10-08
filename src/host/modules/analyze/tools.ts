@@ -112,7 +112,11 @@ export function detectPatterns(experiences: ExperienceRecord[], minOccurrences: 
     patterns.push({
       type: isFailure ? 'failure' : 'opportunity',
       evidence: 'INFERENCE',
-      description: `Recurring signature observed ${data.count} times: ${signature}`,
+      // Description is the dedup key downstream (`existingDescriptions` in the
+      // tool, `seen` in runAutoCycle), so it must NOT embed the occurrence
+      // count: the count grows every cycle, which would key each re-detection
+      // as a brand new pattern and accumulate duplicates in the store.
+      description: `Recurring signature: ${signature}`,
       occurrences: data.count,
       evidenceIds: [...new Set(data.evidenceIds)],
       confidence: Math.min(0.95, 0.4 + data.count * 0.05),
@@ -128,7 +132,9 @@ export function detectPatterns(experiences: ExperienceRecord[], minOccurrences: 
       patterns.push({
         type: 'inefficiency',
         evidence: 'INFERENCE',
-        description: `Failed runs average ${avg.toFixed(1)} steps; likely redundant or retried work.`,
+        // Same rule as the signature patterns: the average drifts as evidence
+        // accumulates, so it must not appear in the dedup key.
+        description: `Failed runs with high average step count; likely redundant or retried work.`,
         occurrences: failed.length,
         evidenceIds: [...new Set(failed.map(e => e.id).filter((id): id is string => typeof id === 'string'))],
         confidence: Math.min(0.9, 0.3 + failed.length * 0.05),
