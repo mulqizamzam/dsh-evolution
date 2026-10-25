@@ -209,8 +209,10 @@ describe('builder LLM request shape', () => {
     // Should contain top-5 patterns by confidence (highest first).
     expect(userText).toContain('Pattern 19')
     expect(userText).toContain('Pattern 18')
-    // Should NOT contain low-confidence patterns.
-    expect(userText).not.toContain('Pattern 0')
+    // Should NOT contain the lowest-confidence pattern as a standalone entry.
+    // Note: "Pattern 0" appears inside IDs like "Pattern 0d1a..." so we check
+    // for the exact description text of Pattern 0.
+    expect(userText).not.toContain('Pattern 0 with a moderately long')
     // Should have at most 5 failures.
     expect(userText.split('Task ').length - 1).toBeLessThanOrEqual(5)
   })
