@@ -180,4 +180,38 @@ describe('builder LLM request shape', () => {
     expect(result.error).toContain('returned no text')
     expect(result.error).toContain('reasoningChars=')
   })
+
+  it('compressed prompt stays under 2000 chars with many patterns and failures', async () => {
+    // Seed 20 patterns and 15 failures — compression should keep prompt small.
+    for (let i = 0; i < 20; i++) {
+      await store.addPattern({ type: 'failure', evidence: 'INFERENCE', description: 'Pattern ' + i + ' with a moderately long description that should be truncated', occurrences: 3 + i, evidenceIds: [], confidence: 0.5 + i * 0.02 })
+    }
+    for (let i = 0; i < 15; i++) {
+      await store.addExperience({ success: false, errors: ['Error ' + i + ' with a very long error message that should be clamped to 120 characters maximum'], stepCount: 12, prompt: 'task-' + i })
+    }
+    const allPatterns = await store.listPatterns(500)
+    const patternIds = allPatterns.map(p => p.id)
+
+    const ctx = makeCtx([
+      { type: 'text-delta', index: 0, text: GOOD_JSON },
+      { type: 'finish', index: 0, reason: { kind: 'stop' } },
+    ])
+    const { builderTools } = await import('../src/host/modules/builder/tools.ts')
+    const tool = builderTools(makeDeps(store, tmpRoot, ctx)).find(t => t.name === 'evo_builder_generate')!
+    await tool.execute({ patternIds, parentVersion: 'v1' } as never, { signal: AbortSignal.timeout(10_000) })
+
+    // The user prompt should be compressed: ≤2000 chars.
+    expect(captured).toHaveLength(1)
+    const userMsg = captured[0].messages.find(m => m.role === 'user')
+    expect(userMsg).toBeDefined()
+    const userText = (userMsg!.content as Array<{ type: string; text: string }>).find(b => b.type === 'text')!.text
+    expect(userText.length).toBeLessThanOrEqual(2000)
+    // Should contain top-5 patterns by confidence (highest first).
+    expect(userText).toContain('Pattern 19')
+    expect(userText).toContain('Pattern 18')
+    // Should NOT contain low-confidence patterns.
+    expect(userText).not.toContain('Pattern 0')
+    // Should have at most 5 failures.
+    expect(userText.split('Task ').length - 1).toBeLessThanOrEqual(5)
+  })
 })

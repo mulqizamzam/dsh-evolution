@@ -689,14 +689,19 @@ function buildSystemPrompt(): string {
 }
 
 function buildUserPrompt(patterns: Pattern[], experiences: ExperienceRecord[], parentVersion: string): string {
-  const patternSummary = patterns.map(p =>
-    '- Pattern ' + p.id + ' (' + p.type + '): ' + p.description + ' (occurrences: ' + p.occurrences + ', confidence: ' + p.confidence + ')'
+  // Compression: cap patterns to top-5 by confidence, limit failures to 5 lines,
+  // clamp each line to 120 chars. Keeps total prompt under ~2000 chars for lower
+  // token cost and faster LLM responses without losing signal.
+  const clamped = (s: string) => (s.length > 120 ? s.slice(0, 117) + '...' : s)
+  const sortedPatterns = [...patterns].sort((a, b) => b.confidence - a.confidence).slice(0, 5)
+  const patternSummary = sortedPatterns.map(p =>
+    '- Pattern ' + p.id + ' (' + p.type + '): ' + clamped(p.description) + ' (occ: ' + p.occurrences + ')'
   ).join('\n')
-  const recentFailures = experiences.filter(e => !e.success).slice(0, 10).map(e =>
-    '- Task ' + (e.taskId ?? 'unknown') + ': ' + (e.summary ?? e.prompt ?? 'no summary') + ' | errors: ' + (e.errors ?? []).join(', ')
+  const recentFailures = experiences.filter(e => !e.success).slice(0, 5).map(e =>
+    '- Task ' + clamped(e.taskId ?? 'unknown') + ': ' + clamped(e.summary ?? e.prompt ?? 'no summary') + ' | errors: ' + clamped((e.errors ?? []).join(', '))
   ).join('\n')
 
-  return 'Parent version: ' + parentVersion + '\n\nOBSERVED PATTERNS:\n' + patternSummary + '\n\nRECENT FAILURES:\n' + (recentFailures || '(none)') + '\n\nGenerate a candidate module that addresses the observed patterns. The module should propose a concrete improvement to reduce the failure rate or improve efficiency.'
+  return 'Parent version: ' + parentVersion + '\n\nOBSERVED PATTERNS:\n' + patternSummary + '\n\nRECENT FAILURES:\n' + (recentFailures || '(none)') + '\n\nGenerate a candidate module that addresses the observed patterns.'
 }
 
 // ── Tool definition ──
