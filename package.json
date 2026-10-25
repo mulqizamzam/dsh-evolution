@@ -33,6 +33,7 @@
     }
   },
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude test/real-agnes-experiment.spec.ts",
