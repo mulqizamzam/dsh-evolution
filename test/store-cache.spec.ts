@@ -159,11 +159,15 @@ describe('EvolutionStore cache', () => {
     // First call: listExperiences populates cache; versioned filter runs client-side.
     const byV1 = await store.listExperiencesByVersion('v1', 10)
     expect(byV1).toHaveLength(3)
-    // Second call: listExperiences hits cache, filter still runs (new array).
+    // Second call: listExperiences hits cache (no disk read), filter runs in memory.
     const byV1Again = await store.listExperiencesByVersion('v1', 10)
     expect(byV1Again).toHaveLength(3)
-    // Same IDs confirms correct filtering, even though reference differs.
+    // Same IDs confirms correct filtering.
     expect(byV1.map(e => e.id)).toEqual(byV1Again.map(e => e.id))
+    // Third call with different limit reuses cache, same result.
+    const byV1Third = await store.listExperiencesByVersion('v1', 5)
+    expect(byV1Third).toHaveLength(3)
+    expect(byV1Third.map(e => e.id)).toEqual(byV1.map(e => e.id))
   })
 
   it('different limit values produce different cache entries', async () => {
