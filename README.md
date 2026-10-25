@@ -2,9 +2,9 @@
 
 **Evidence-driven self-evolution for DeepSeek Harness (DSH).**
 
-dsh-evolution turns completed task experiences into traceable improvement candidates, evaluates them against benchmarks, and manages versioned promotion and rollback. It is designed to keep the evolution process inspectable: patterns link back to evidence, candidates are validated before promotion, and previously promoted versions remain available for recovery.
+dsh-evolution turns completed task experiences into traceable improvement candidates, evaluates them against benchmarks, and manages versioned promotion and rollback. Patterns link back to evidence, generated candidates are validated, and versioned artifacts support recovery.
 
-> **Safety defaults:** automatic experience recording and the evolution trigger are enabled by default, while LLM-based candidate generation and promotion are disabled. Enable those capabilities deliberately after reviewing your environment and configuration.
+> **Safety defaults:** automatic experience recording and the evolution trigger are enabled by default. LLM-based candidate generation and autonomous promotion are disabled by default and should be enabled deliberately.
 
 ## How it works
 
@@ -31,19 +31,19 @@ Experience store ──► Pattern analysis ──► Candidate generation
 ```
 
 1. **Capture experience.** Store task outcomes and relevant execution metadata as JSON records.
-2. **Find recurring patterns.** Analyze experience records for repeated signals and retain links to supporting evidence.
-3. **Build a candidate.** Create an improvement candidate; when enabled, the configured host LLM can generate its module files, tests, manifest, and benchmark cases.
+2. **Find recurring patterns.** Analyze records for repeated signals and retain links to supporting evidence.
+3. **Build a candidate.** Create an improvement candidate; when enabled, the configured host LLM can generate module files, tests, a manifest, and benchmark cases.
 4. **Validate and evaluate.** Validate candidate files and run benchmark checks. Sandbox execution is available where the host supports it.
-5. **Manage versions.** Promotion is gated by configuration and benchmark evidence. Version artifacts can be activated at startup, and an earlier version can be restored with rollback.
+5. **Manage versions.** Promotion is gated by configuration and benchmark evidence. Version artifacts can be activated at startup, and a previous version can be restored.
 
 ## Key capabilities
 
 - **Evidence-linked analysis** — patterns can be traced to the experience records that support them.
 - **Candidate lifecycle management** — create, inspect, and list proposed changes.
 - **Benchmarking** — run threshold-based checks, compare results, and perform live or A/B benchmark runs.
-- **Controlled promotion** — promotion can be disabled by default and requires a candidate that passes the applicable checks.
-- **Version history and rollback** — keep versioned artifacts and restore a previous version when necessary.
-- **Sandboxed execution** — execute candidate-related commands through the configured sandbox; the dedicated sandbox tool requires Bubblewrap (`bwrap`) and refuses execution when it is unavailable.
+- **Controlled promotion** — autonomous promotion is disabled by default and depends on benchmark evidence.
+- **Version history and rollback** — versioned artifacts support recovery to a prior version.
+- **Sandboxed execution** — the dedicated sandbox tool requires Bubblewrap (`bwrap`) and refuses execution when it is unavailable.
 - **File-backed persistence** — human-readable JSON records; no separate database service is required.
 - **Runtime visibility** — inspect plugin status, health, observation state, and activation status.
 
@@ -53,8 +53,8 @@ dsh-evolution generates and evaluates **module code**; it does not fine-tune or 
 
 - Node.js **20 or later**
 - DeepSeek Harness (DSH) **0.1.1-rc.1 or later**
-- A configured host LLM endpoint is required for LLM-backed candidate generation and the complete autonomous cycle.
-- Bubblewrap (`bwrap`) is required for `evo_sandbox_exec`.
+- A configured host LLM endpoint for LLM-backed candidate generation and the complete autonomous cycle
+- Bubblewrap (`bwrap`) for `evo_sandbox_exec`
 
 ## Installation
 
