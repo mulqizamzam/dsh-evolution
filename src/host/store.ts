@@ -111,6 +111,9 @@ export class EvolutionStore {
     }
     // Zero active versions (or no versions at all): leave pointer absent;
     // getActiveVersion() returns null in that case and activation deactivates.
+    // Invalidate the cache so the first read-after-init sees the current disk
+    // state, not whatever was present when the instance was constructed.
+    this.invalidateCache()
     return this.root
   }
 
