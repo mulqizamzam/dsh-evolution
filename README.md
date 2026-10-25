@@ -51,51 +51,84 @@ dsh-evolution generates and evaluates **module code**; it does not fine-tune or 
 
 ## Requirements
 
-- Node.js **20 or later**
-- DeepSeek Harness (DSH) **0.1.1-rc.1 or later**
-- A configured host LLM endpoint for LLM-backed candidate generation and the complete autonomous cycle
-- Bubblewrap (`bwrap`) for `evo_sandbox_exec`
+The requirements below come from the package manifest and the runtime features used by the plugin.
+
+- **DeepSeek Harness (DSH):** a version that satisfies the declared `engines.dsh` range, `>=0.1.1-rc.1`.
+- **Node.js:** version **20 or newer**, as declared by `engines.node` in `package.json`.
+- **DSH plugin-management command:** installation is performed through `dsh plugin`, which delegates package operations to the package manager configured by the DSH installation.
+- **Host LLM configuration (optional):** needed for LLM-backed candidate generation and the full autonomous cycle; it is not needed just to install the bundle or use the experience, analysis, status, and other non-generation tools.
+- **Bubblewrap (`bwrap`, optional):** required for isolated shell execution through `evo_sandbox_exec`. Sandbox-dependent candidate validation/benchmark paths also need the sandbox runtime to be available.
 
 ## Installation
 
-### 1. Add the package to your DSH profile
+`dsh-evolution` is an installable **DSH bundle package**: `package.json` declares `dsh.bundle.patch`, and the package ships `lib/` plus `cordis.patch.yml`. Install it with the DSH plugin command so DSH can register it in the selected profile's bundle list. Do not manually copy the bundle's `insert` block into the profile for a normal installation.
 
-For a local checkout, add the package to the profile's `package.json`:
+### Option A — install from GitHub
 
-```json
-{
-  "dependencies": {
-    "dsh-evolution": "link:/path/to/dsh-evolution"
-  }
-}
+Run this from a terminal where the `dsh` command is available. Replace `web` with the profile you want to use.
+
+```bash
+dsh plugin --profile web add github:mulqizamzam/dsh-evolution#main
 ```
 
-Replace `/path/to/dsh-evolution` with the absolute path to your local clone.
+The command installs the repository as a package. Because the package declares a DSH bundle patch, DSH registers `dsh-evolution` in that profile's `dsh.profile.bundles` list.
 
-### 2. Register the bundle
+Verify that the bundle layer is present in the effective configuration:
 
-Add the following to the profile's `cordis.patch.yml`:
+```bash
+dsh --profile web --dump-config
+```
+
+Look for the `dsh-evolution` layer. Restart the profile or DSH process if it was already running when you installed the bundle.
+
+### Option B — install a local checkout (development)
+
+Use this when you want to work from a clone of this repository. Run the commands from the repository root:
+
+```bash
+git clone https://github.com/mulqizamzam/dsh-evolution.git
+cd dsh-evolution
+npm ci
+npm run build
+dsh plugin --profile web add .
+```
+
+Replace `web` with your target profile. `npm ci` installs the dependencies recorded in `package-lock.json`; `npm run build` refreshes the generated files under `lib/` from the TypeScript source before linking the checkout into the profile.
+
+Verify the resulting layer:
+
+```bash
+dsh --profile web --dump-config
+```
+
+### Configuration overrides
+
+The package's own `cordis.patch.yml` supplies the shipped defaults. Add overrides in the selected profile's `cordis.patch.yml` only when you need to change those defaults. DSH applies the profile patch after bundle layers.
+
+For example, this top-level row override disables automatic evolution while leaving the manually callable `evo_*` tools installed:
 
 ```yaml
-- insert:
-    - id: dsh-evolution
-      name: dsh-evolution
-      config:
-        evolution:
-          enabled: true
-          autoRecord: true
-          autoTrigger: true
-          analysis:
-            minExperiences: 20
-            minOccurrences: 5
-          generation:
-            enabled: false
-          promotion:
-            enabled: false
-          maxCyclesPerProcess: 3
+- id: dsh-evolution
+  config:
+    evolution:
+      enabled: false
+      autoRecord: false
+      autoTrigger: false
+      analysis:
+        minExperiences: 20
+        minOccurrences: 5
+      generation:
+        enabled: false
+      promotion:
+        enabled: false
+      maxCyclesPerProcess: 3
 ```
 
-These are the shipped baseline values. Review the options below before enabling generation or promotion. The profile's patch mechanism is sensitive to row shape; use the same top-level row structure when overriding this configuration.
+The row override replaces that row's entire `config` object; restate any non-default configuration you need to preserve. To uninstall the bundle and unregister its tools, use the DSH plugin manager rather than leaving the dependency installed:
+
+```bash
+dsh plugin --profile web remove dsh-evolution
+```
 
 ## Configuration
 
