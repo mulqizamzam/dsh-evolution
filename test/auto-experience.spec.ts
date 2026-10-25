@@ -179,8 +179,9 @@ describe('runAutoCycle: threshold and loop safety', () => {
     const first = await runAutoCycle(deps)
     expect(first.ran).toBe(true)
     const second = await runAutoCycle(deps)
+    // Either debounce or fresh-experience gate can block; both are valid.
     expect(second.ran).toBe(false)
-    expect(second.reason).toContain('waiting for more new experiences')
+    expect(second.reason).toMatch(/waiting for more new experiences|debounce/)
   })
 
   it('respects the per-process cycle cap', async () => {
@@ -264,6 +265,8 @@ describe('runAutoCycle: threshold and loop safety', () => {
       await store.addExperience({ success: false, errors: ['sig-accounting-2'], stepCount: 3, prompt: 'x2' })
     }
     const deps2 = makeDeps(store, tmpRoot, OVERRIDE)
+    // Wait past the debounce window so the second cycle can run.
+    await new Promise(r => setTimeout(r, 2050))
     const o2 = await runAutoCycle(deps2)
     expect(o2.ran).toBe(true)
     expect(autoGuardState().cyclesRun).toBe(1)
@@ -321,5 +324,35 @@ describe('runAutoCycle: threshold and loop safety', () => {
     const o2 = await runAutoCycle(makeDeps(store, tmpRoot, OVERRIDE))
     expect(o2.ran).toBe(true)
     expect(autoGuardState().cyclesRun).toBe(1)
+  })
+
+  it('debounce skips a cycle within 2s of a productive cycle', async () => {
+    for (let i = 0; i < 20; i++) {
+      await store.addExperience({ success: false, errors: ['sig-a'], stepCount: 5, prompt: 'p' })
+    }
+    const deps = makeDeps(store, tmpRoot)
+    // First cycle runs productively.
+    const first = await runAutoCycle(deps)
+    expect(first.ran).toBe(true)
+    // Immediate second call should be debounced.
+    const second = await runAutoCycle(deps)
+    expect(second.ran).toBe(false)
+    expect(second.reason).toContain('debounce')
+  })
+
+  it('debounce allows a cycle after 2s with fresh evidence', async () => {
+    for (let i = 0; i < 20; i++) {
+      await store.addExperience({ success: false, errors: ['sig-b'], stepCount: 5, prompt: 'q' })
+    }
+    const deps = makeDeps(store, tmpRoot)
+    const first = await runAutoCycle(deps)
+    expect(first.ran).toBe(true)
+    // Add new evidence and wait past debounce window.
+    for (let i = 0; i < 20; i++) {
+      await store.addExperience({ success: false, errors: ['sig-c'], stepCount: 5, prompt: 'r' })
+    }
+    await new Promise(r => setTimeout(r, 2050))
+    const third = await runAutoCycle(deps)
+    expect(third.ran).toBe(true)
   })
 })

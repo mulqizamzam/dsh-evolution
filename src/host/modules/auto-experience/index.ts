@@ -111,15 +111,18 @@ const guards = {
   inFlight: false,
   cyclesRun: 0,
   lastCycleExperienceCount: -1,
+  /** Timestamp of the last productive cycle (ms since epoch). Used for debounce. */
+  lastCycleAt: 0,
 }
 
 export function resetAutoGuards(): void {
   guards.inFlight = false
   guards.cyclesRun = 0
   guards.lastCycleExperienceCount = -1
+  guards.lastCycleAt = 0
 }
 
-export function autoGuardState(): { inFlight: boolean; cyclesRun: number; lastCycleExperienceCount: number } {
+export function autoGuardState(): { inFlight: boolean; cyclesRun: number; lastCycleExperienceCount: number; lastCycleAt: number } {
   return { ...guards }
 }
 
@@ -343,6 +346,13 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
   if (guards.cyclesRun >= cfg.maxCyclesPerProcess) {
     return { ran: false, reason: 'per-process cycle cap reached' }
   }
+  // Debounce: skip if a productive cycle ran within the last 2 seconds.
+  // This prevents rapid-fire analysis during bulk experience imports while still
+  // allowing the first cycle to run immediately. Non-productive skips (not enough
+  // experiences) do NOT update lastCycleAt so the next turn can retry.
+  if (Date.now() - guards.lastCycleAt < 2000) {
+    return { ran: false, reason: 'debounce: last cycle ran less than 2s ago' }
+  }
 
   guards.inFlight = true
   // Track whether this cycle consumed a slot so the catch block can roll it
@@ -392,6 +402,8 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
 
     guards.cyclesRun += 1
     slotConsumed = true
+    // Mark the timestamp so the debounce gate can skip rapid re-runs.
+    guards.lastCycleAt = Date.now()
     deps.log('auto-cycle: ' + fresh.length + ' new pattern(s) from ' + experiences.length + ' experiences')
 
     // If the active version is degraded, prepend a synthetic degradation
