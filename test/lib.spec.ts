@@ -9,7 +9,7 @@ import { clampText } from '../src/lib/caps.ts'
 import { newId, isoDate, isSafeKey, versionId } from '../src/lib/ids.ts'
 import { errorMessage, attempt, attemptSync } from '../src/lib/errors.ts'
 import { resolveStateRoot, envStateRoot, ensureStateRoot } from '../src/lib/home.ts'
-import { readJsonSafe, writeJsonAtomic, listDir } from '../src/lib/fsx.ts'
+import { readJsonSafe, writeJsonAtomic, listDir, cleanupTmpOrphans } from '../src/lib/fsx.ts'
 
 describe('sanitize', () => {
   it('neutralize removes brace pairs', () => {
@@ -255,5 +255,35 @@ describe('fsx', () => {
     const files = await listDir(tmp, limit)
     expect(files.length).toBe(limit)
     expect(files[0]).toBe(late)
+  })
+
+  it('cleanupTmpOrphans removes .tmp.* files matching the atomic-write pattern', async () => {
+    // Simulate orphaned tmp files left by a crash mid-write.
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(join(tmp, 'data.json.tmp.abcdef123456'), '{broken')
+    await writeFile(join(tmp, 'other.tmp.111111111111'), 'garbage')
+    // A normal file must NOT be removed.
+    await writeJsonAtomic(join(tmp, 'real.json'), { ok: true })
+    // A non-matching temp file must NOT be removed.
+    await writeFile(join(tmp, 'foo.tmp'), 'no-id')
+
+    const removed = await cleanupTmpOrphans(tmp)
+    expect(removed).toBe(2)
+
+    // Orphaned tmp files are gone.
+    const remaining = await readdir(tmp)
+    expect(remaining).not.toContain('data.json.tmp.abcdef123456')
+    expect(remaining).not.toContain('other.tmp.111111111111')
+    // Real data and non-matching temps survive.
+    expect(remaining).toContain('real.json')
+    expect(remaining).toContain('foo.tmp')
+    // The real file is intact.
+    const data = await readJsonSafe(join(tmp, 'real.json'))
+    expect(data).toEqual({ ok: true })
+  })
+
+  it('cleanupTmpOrphans is safe on a missing directory', async () => {
+    const removed = await cleanupTmpOrphans(join(tmp, 'nonexistent'))
+    expect(removed).toBe(0)
   })
 })

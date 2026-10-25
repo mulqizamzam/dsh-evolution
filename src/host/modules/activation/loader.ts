@@ -14,9 +14,8 @@
  */
 
 import { pathToFileURL } from 'node:url'
-import { readFile, rm, realpath } from 'node:fs/promises'
+import { readFile, rm, realpath, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { readdirSync } from 'node:fs'
 import {
   artifactFilesDir, artifactPluginPath, readArtifactManifest, validateArtifact, versionDir,
 } from './artifact.ts'
@@ -222,18 +221,22 @@ export async function activateVersion(deps: ModuleDeps, versionId: string): Prom
  */
 async function pruneStaleStaging(stateRoot: string): Promise<void> {
   try {
-    const entries = readdirSync(join(stateRoot, 'versions'))
+    const entries = await readdir(join(stateRoot, 'versions'))
     for (const entry of entries) {
-      if (!entry.endsWith('.staging')) continue
-      const siblingId = entry.slice(0, -'.staging'.length)
-      // If the sibling is a version directory with a valid manifest, the staging
-      // dir may be an in-progress replacement — skip it.
-      const siblingManifest = join(stateRoot, 'versions', siblingId, 'manifest.json')
+      // Clean up both .staging dirs (in-progress promotions) and .new dirs
+      // (orphaned intermediate dirs from a crash between rename and commit).
+      if (!entry.endsWith('.staging') && !entry.endsWith('.new')) continue
+      const stem = entry.endsWith('.staging')
+        ? entry.slice(0, -'.staging'.length)
+        : entry.slice(0, -'.new'.length)
+      // If the sibling is a version directory with a valid manifest, the dir
+      // may be in use — skip it.
+      const siblingManifest = join(stateRoot, 'versions', stem, 'manifest.json')
       try {
         await readFile(siblingManifest, 'utf8')
         continue
       } catch {
-        // No valid manifest in the sibling — the staging dir is an orphan.
+        // No valid manifest in the sibling — the dir is an orphan.
       }
       await rm(join(stateRoot, 'versions', entry), { recursive: true, force: true })
     }

@@ -1,6 +1,7 @@
 import { errorMessage, makeLogger } from '../lib/errors.ts'
 import { neutralize } from '../lib/sanitize.ts'
 import { resolveStateRoot } from '../lib/home.ts'
+import { cleanupTmpOrphans } from '../lib/fsx.ts'
 import { Config, DEFAULT_CONFIG, INJECT_LABEL, resolveConfig } from './config.ts'
 import type { EvoConfig } from './config.ts'
 import { EvolutionStore, SCHEMA_VERSION } from './store.ts'
@@ -164,6 +165,9 @@ async function boot(ctx: HostContextShape, rawConfig: Partial<EvoConfig>, log: R
   // scaffold must exist first.
   try {
     await store.init()
+    // Clean up any .tmp.* orphans left by crashes in previous writeAtomic calls.
+    const cleaned = await cleanupTmpOrphans(root)
+    if (cleaned > 0) log.info('cleaned ' + cleaned + ' tmp orphan(s) at startup')
     log.info('state ready at ' + root)
   } catch (error) {
     log.warn('state scaffold failed: ' + errorMessage(error))

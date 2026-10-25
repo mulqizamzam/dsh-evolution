@@ -2,6 +2,29 @@ import { readFile, writeFile, readdir, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { newId } from './ids.ts'
 
+/** Regex matching orphan .tmp.{id} files left by writeJsonAtomic/writeTextAtomic on crash. */
+const TMP_ORPHAN_RE = /\.tmp\.[a-f0-9]{12}$/
+
+/**
+ * Scan a directory for orphan .tmp.* files (left after a crash mid-write) and
+ * delete them. Returns the number of files removed.
+ * Safe to call at startup — only touches known atomic-write temp names.
+ */
+export async function cleanupTmpOrphans(dir: string): Promise<number> {
+  let removed = 0
+  try {
+    const entries = await readdir(dir)
+    for (const name of entries) {
+      if (!TMP_ORPHAN_RE.test(name)) continue
+      try {
+        await unlink(join(dir, name))
+        removed++
+      } catch { /* already gone */ }
+    }
+  } catch { /* dir may not exist yet */ }
+  return removed
+}
+
 /** Read a JSON file safely; returns null on ENOENT or parse failure. */
 export async function readJsonSafe(path: string): Promise<unknown> {
   try {

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, readFile, writeFile, access } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, writeFile, access, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
@@ -299,5 +299,53 @@ describe('candidate -> plugin activation', () => {
     const after = await store.listVersions()
     expect(after).toEqual(before)
     expect((await store.getActiveVersion())!.id).toBe('v2')
+  })
+
+  it('evo_observe_state reports stored count, not ring buffer length', async () => {
+    const host = makeFakeHost()
+    await bootPlugin(host, root)
+    // Seed 7 experiences directly into the store.
+    for (let i = 0; i < 7; i++) {
+      await store.addExperience({ success: true, prompt: 'task-' + i })
+    }
+    const result = await host.call('evo_observe_state') as {
+      observedTurnsThisProcess: number
+      storedExperiences: number
+      ringBufferInFlight: number
+    }
+    // Both fields should reflect the 7 stored records, not a zero ring buffer.
+    expect(result.observedTurnsThisProcess).toBe(7)
+    expect(result.storedExperiences).toBe(7)
+    // Ring buffer is empty because no live session hook fired in this test.
+    expect(result.ringBufferInFlight).toBe(0)
+  })
+
+  it('pruneStaleStaging cleans up both .staging and .new orphans', async () => {
+    const host = makeFakeHost()
+    await bootPlugin(host, root)
+    // Create an orphaned .staging dir with no valid sibling manifest.
+    const stagingOrphan = join(root, 'versions', 'v99.staging')
+    await mkdir(stagingOrphan, { recursive: true })
+    // Create an orphaned .new dir (left after a crash mid-promotion).
+    const newOrphan = join(root, 'versions', 'v98.new')
+    await mkdir(newOrphan, { recursive: true })
+    // A live .staging with a valid sibling manifest must NOT be removed.
+    const liveStaging = join(root, 'versions', 'v2.staging')
+    const v2Dir = join(root, 'versions', 'v2')
+    await mkdir(v2Dir, { recursive: true })
+    await writeFile(join(v2Dir, 'manifest.json'), '{"toolName":"test"}', 'utf8')
+    await mkdir(liveStaging, { recursive: true })
+
+    // Re-boot triggers pruneStaleStaging again via refreshActivation.
+    const freshHost = makeFakeHost()
+    await bootPlugin(freshHost, root)
+
+    // Orphans are gone.
+    const { access } = await import('node:fs/promises')
+    await expect(access(stagingOrphan)).rejects.toThrow()
+    await expect(access(newOrphan)).rejects.toThrow()
+    // Live sibling is untouched.
+    await access(liveStaging)
+    await access(join(v2Dir, 'manifest.json'))
   })
 })

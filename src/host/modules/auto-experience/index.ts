@@ -508,9 +508,12 @@ export function apply(deps: ModuleDeps): void {
     execute: async () => {
       const cfg = deps.cfg().evolution
       const experiences = await store.listExperiences(10000)
-      const observed = observations.length
+      // Use the stored experience count, not the in-memory ring buffer length,
+      // so callers see the true persistence count even after a process restart.
+      const storedCount = experiences.length
       return neutralizeDeep({
-        observedTurnsThisProcess: observed,
+        observedTurnsThisProcess: storedCount,
+        ringBufferInFlight: observations.length,
         lastObservation: observations.length > 0 ? observations[observations.length - 1] : null,
         guards: autoGuardState(),
         thresholds: {
