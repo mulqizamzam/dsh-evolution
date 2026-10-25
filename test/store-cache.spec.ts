@@ -182,4 +182,52 @@ describe('EvolutionStore cache', () => {
     // Each is a distinct array.
     expect(limited).not.toBe(full)
   })
+
+  it('listExperiences migrates from individual .json files to .jsonl on first read', async () => {
+    // Write individual .json files directly (bypassing addExperience).
+    const { writeFile } = await import('node:fs/promises')
+    const dir = (store as unknown as { experienceDir: () => string }).experienceDir()
+    await writeFile(join(dir, 'exp-a.json'), JSON.stringify({ id: 'exp-a', timestamp: '2026-01-01T00:00:00.000Z', success: true, prompt: 'a' }), 'utf8')
+    await writeFile(join(dir, 'exp-b.json'), JSON.stringify({ id: 'exp-b', timestamp: '2026-01-02T00:00:00.000Z', success: false, prompt: 'b' }), 'utf8')
+
+    // First listExperiences call should trigger migration and return both records.
+    const records = await store.listExperiences(10)
+    expect(records).toHaveLength(2)
+    expect(records.map(r => r.id).sort()).toEqual(['exp-a', 'exp-b'])
+
+    // Second call should hit cache (no migration needed).
+    const cached = await store.listExperiences(10)
+    expect(cached).toBe(records)
+  })
+
+  it('addExperience writes to both .json and .jsonl', async () => {
+    const { readdir } = await import('node:fs/promises')
+    const record = await store.addExperience({ success: true, prompt: 'task' })
+    const dir = (store as unknown as { experienceDir: () => string }).experienceDir()
+    const files = await readdir(dir)
+    // Individual .json file exists.
+    expect(files).toContain(`${record.id}.json`)
+    // .jsonl file also exists and contains the record.
+    expect(files).toContain('experiences.jsonl')
+    const jsonlContent = await (await import('node:fs/promises')).readFile(join(dir, 'experiences.jsonl'), 'utf8')
+    expect(jsonlContent).toContain(record.id)
+  })
+
+  it('pruneExperiences rewrites .jsonl with only kept records', async () => {
+    for (let i = 0; i < 5; i++) {
+      await store.addExperience({ success: true, prompt: 'task-' + i })
+    }
+    const before = await store.listExperiences(100)
+    expect(before).toHaveLength(5)
+
+    await store.pruneExperiences(3, 999999)
+    const after = await store.listExperiences(100)
+    expect(after).toHaveLength(3)
+    // .jsonl should exist and contain exactly 3 records.
+    const { readFile } = await import('node:fs/promises')
+    const dir = (store as unknown as { experienceDir: () => string }).experienceDir()
+    const jsonlContent = await readFile(join(dir, 'experiences.jsonl'), 'utf8')
+    const jsonlRecords = jsonlContent.split('\n').filter(Boolean)
+    expect(jsonlRecords).toHaveLength(3)
+  })
 })

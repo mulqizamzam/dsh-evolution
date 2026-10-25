@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { ensureDir, ensureStateRoot, resolveStateRoot } from '../lib/home.ts'
 import type { ContextGet } from '../lib/home.ts'
-import { readJsonSafe, writeJsonAtomic, writeJsonFile, listDir, removeFile } from '../lib/fsx.ts'
+import { readJsonSafe, writeJsonAtomic, writeJsonFile, listDir, removeFile, readJsonlSafe, writeJsonlAtomic } from '../lib/fsx.ts'
 import { newId, isoDateTime, versionId, isSafeKey } from '../lib/ids.ts'
 import type {
   ExperienceRecord, Pattern, CandidateModule, BenchmarkRun, Version,
@@ -149,8 +149,41 @@ export class EvolutionStore {
       timestamp: isoDateTime(this.nowFn()),
     }
     await writeJsonAtomic(join(this.experienceDir(), `${full.id}.json`), full)
+    // Also write to the .jsonl batch file for efficient bulk reads.
+    await this.appendExperienceJsonl(full)
     this.invalidateCache()
     return full
+  }
+
+  /** Ensure the .jsonl file exists by migrating from individual .json files if needed. */
+  private async ensureJsonlExists(): Promise<void> {
+    const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
+    try {
+      await (await import('node:fs/promises')).access(jsonlPath)
+      return // already exists
+    } catch { /* doesn't exist — migrate */ }
+    const files = await listDir(this.experienceDir(), Number.MAX_SAFE_INTEGER)
+    const records: ExperienceRecord[] = []
+    for (const f of files) {
+      if (!f.endsWith('.json') || f === 'experiences.jsonl') continue
+      const data = await readJsonSafe(join(this.experienceDir(), f))
+      if (data && typeof data === 'object' && 'id' in (data as Record<string, unknown>)) {
+        records.push(data as ExperienceRecord)
+      }
+    }
+    if (records.length > 0) {
+      await writeJsonlAtomic(jsonlPath, records)
+    }
+  }
+
+  private async appendExperienceJsonl(record: ExperienceRecord): Promise<void> {
+    const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
+    try {
+      await (await import('node:fs/promises')).appendFile(jsonlPath, JSON.stringify(record) + '\n', 'utf8')
+    } catch {
+      // File doesn't exist yet — create it with just this record.
+      await writeJsonlAtomic(jsonlPath, [record])
+    }
   }
 
   async getExperience(id: string): Promise<ExperienceRecord | null> {
@@ -164,15 +197,21 @@ export class EvolutionStore {
     const key = `listExperiences:${limit}`
     const cached = this.getCache<ExperienceRecord[]>(key)
     if (cached !== null) return cached
-    const files = await listDir(this.experienceDir(), limit)
-    const records: ExperienceRecord[] = []
-    for (const f of files) {
-      if (!f.endsWith('.json')) continue
-      const data = await readJsonSafe(join(this.experienceDir(), f))
-      if (data && typeof data === 'object') records.push(data as ExperienceRecord)
+    const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
+    let records: ExperienceRecord[]
+    try {
+      await (await import('node:fs/promises')).access(jsonlPath)
+      records = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
+    } catch {
+      // .jsonl doesn't exist yet — migrate from individual files.
+      await this.ensureJsonlExists()
+      records = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
     }
-    this.setCache(key, records)
-    return records
+    // Sort by timestamp descending (newest first) to match listDir ordering.
+    records.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    const result = records.slice(0, limit)
+    this.setCache(key, result)
+    return result
   }
 
   /**
@@ -234,6 +273,14 @@ export class EvolutionStore {
     const nonExpired = records.filter(r => new Date(r.timestamp).getTime() >= cutoff)
     if (nonExpired.length > maxRecords) {
       const toRemove = nonExpired.slice(0, nonExpired.length - maxRecords)
+      const kept = nonExpired.filter(r => !toRemove.some(t => t.id === r.id))
+      // Rewrite .jsonl with only kept records for consistency.
+      const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
+      if (kept.length > 0) {
+        await writeJsonlAtomic(jsonlPath, kept.map(r => ({ id: r.id, timestamp: r.timestamp })))
+      } else {
+        await removeFile(jsonlPath)
+      }
       for (const r of toRemove) {
         await removeFile(join(this.experienceDir(), r.file))
         removed++

@@ -105,3 +105,23 @@ export async function readJsonFile<T = unknown>(path: string): Promise<T> {
 export async function writeJsonFile(path: string, data: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(data, null, 2) + '\n', 'utf8')
 }
+
+/** Read a newline-delimited JSON file; returns parsed objects or empty array on failure. */
+export async function readJsonlSafe(path: string): Promise<unknown[]> {
+  try {
+    const text = await readFile(path, 'utf8')
+    if (!text.trim()) return []
+    return text.split('\n').filter(Boolean).map(line => JSON.parse(line))
+  } catch {
+    return []
+  }
+}
+
+/** Atomic newline-delimited JSON write: write to tmp then rename. */
+export async function writeJsonlAtomic(path: string, records: unknown[]): Promise<void> {
+  const content = records.map(r => JSON.stringify(r)).join('\n') + '\n'
+  const tmp = path + '.tmp.' + newId()
+  await writeFile(tmp, content, 'utf8')
+  const { rename } = await import('node:fs/promises')
+  await rename(tmp, path)
+}
