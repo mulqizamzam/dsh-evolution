@@ -62,9 +62,20 @@ export interface StoreOptions {
 /** SCHEMA_VERSION: bumped when file layout changes. */
 export const SCHEMA_VERSION = 1
 
+/** Cache TTL for list operations: 5 seconds. Stale reads are acceptable because
+ *  every mutation path invalidates the cache before returning. */
+const CACHE_TTL_MS = 5_000
+
+/**
+ * In-memory cache entry for list operations. Keyed by "(method,limit)".
+ */
+type CacheEntry<T> = { ts: number; value: T }
+
 export class EvolutionStore {
   private root: string
   private nowFn: () => Date
+  /** LRU-style cache: key → { timestamp, value }. Cleared on every mutation. */
+  private readonly cache = new Map<string, CacheEntry<unknown>>()
 
   constructor(options: StoreOptions) {
     this.root = resolveStateRoot(options.get, options.fallbackRoot, options.profileName)
@@ -105,6 +116,25 @@ export class EvolutionStore {
 
   getRoot(): string { return this.root }
 
+  // ── Cache helpers ──
+
+  private getCache<T>(key: string): T | null {
+    const entry = this.cache.get(key)
+    if (!entry) return null
+    if (Date.now() - entry.ts < CACHE_TTL_MS) return entry.value as T
+    this.cache.delete(key)
+    return null
+  }
+
+  private setCache<T>(key: string, value: T): void {
+    this.cache.set(key, { ts: Date.now(), value })
+  }
+
+  /** Invalidate every cached list entry. Called after any mutation. */
+  private invalidateCache(): void {
+    this.cache.clear()
+  }
+
   // ── Experience ──
 
   private experienceDir(): string { return join(this.root, 'experiences') }
@@ -116,6 +146,7 @@ export class EvolutionStore {
       timestamp: isoDateTime(this.nowFn()),
     }
     await writeJsonAtomic(join(this.experienceDir(), `${full.id}.json`), full)
+    this.invalidateCache()
     return full
   }
 
@@ -127,6 +158,9 @@ export class EvolutionStore {
   }
 
   async listExperiences(limit: number = 50): Promise<ExperienceRecord[]> {
+    const key = `listExperiences:${limit}`
+    const cached = this.getCache<ExperienceRecord[]>(key)
+    if (cached !== null) return cached
     const files = await listDir(this.experienceDir(), limit)
     const records: ExperienceRecord[] = []
     for (const f of files) {
@@ -134,6 +168,7 @@ export class EvolutionStore {
       const data = await readJsonSafe(join(this.experienceDir(), f))
       if (data && typeof data === 'object') records.push(data as ExperienceRecord)
     }
+    this.setCache(key, records)
     return records
   }
 
@@ -202,6 +237,7 @@ export class EvolutionStore {
       }
     }
 
+    this.invalidateCache()
     return removed
   }
 
@@ -226,10 +262,14 @@ export class EvolutionStore {
       createdAt: isoDateTime(this.nowFn()),
     }
     await writeJsonAtomic(join(this.patternDir(), `${full.id}.json`), full)
+    this.invalidateCache()
     return full
   }
 
   async listPatterns(limit: number = 100): Promise<Pattern[]> {
+    const key = `listPatterns:${limit}`
+    const cached = this.getCache<Pattern[]>(key)
+    if (cached !== null) return cached
     const files = await listDir(this.patternDir(), limit)
     const patterns: Pattern[] = []
     for (const f of files) {
@@ -237,6 +277,7 @@ export class EvolutionStore {
       const data = await readJsonSafe(join(this.patternDir(), f))
       if (data && typeof data === 'object') patterns.push(data as Pattern)
     }
+    this.setCache(key, patterns)
     return patterns
   }
 
@@ -252,6 +293,7 @@ export class EvolutionStore {
       updatedAt: isoDateTime(this.nowFn()),
     }
     await writeJsonAtomic(join(this.candidateDir(), `${full.id}.json`), full)
+    this.invalidateCache()
     return full
   }
 
@@ -269,10 +311,14 @@ export class EvolutionStore {
     if (!existing) return null
     const updated = { ...existing, ...updates, id, updatedAt: isoDateTime(this.nowFn()) }
     await writeJsonAtomic(join(this.candidateDir(), `${id}.json`), updated)
+    this.invalidateCache()
     return updated
   }
 
   async listCandidates(limit: number = 50): Promise<CandidateModule[]> {
+    const key = `listCandidates:${limit}`
+    const cached = this.getCache<CandidateModule[]>(key)
+    if (cached !== null) return cached
     const files = await listDir(this.candidateDir(), limit)
     const candidates: CandidateModule[] = []
     for (const f of files) {
@@ -280,6 +326,7 @@ export class EvolutionStore {
       const data = await readJsonSafe(join(this.candidateDir(), f))
       if (data && typeof data === 'object') candidates.push(data as CandidateModule)
     }
+    this.setCache(key, candidates)
     return candidates
   }
 
@@ -297,10 +344,14 @@ export class EvolutionStore {
       createdAt: createdAt ?? isoDateTime(this.nowFn()),
     }
     await writeJsonAtomic(join(this.benchmarkDir(), `${full.id}.json`), full)
+    this.invalidateCache()
     return full
   }
 
   async listBenchmarks(limit: number = 50): Promise<BenchmarkRun[]> {
+    const key = `listBenchmarks:${limit}`
+    const cached = this.getCache<BenchmarkRun[]>(key)
+    if (cached !== null) return cached
     const files = await listDir(this.benchmarkDir(), limit)
     const runs: BenchmarkRun[] = []
     for (const f of files) {
@@ -308,6 +359,7 @@ export class EvolutionStore {
       const data = await readJsonSafe(join(this.benchmarkDir(), f))
       if (data && typeof data === 'object') runs.push(data as BenchmarkRun)
     }
+    this.setCache(key, runs)
     return runs
   }
 
@@ -469,10 +521,14 @@ export class EvolutionStore {
     if (oldActive && oldActive.id !== version.id) {
       await writeJsonAtomic(join(this.versionDir(), `${oldActive.id}.json`), { ...oldActive, status: 'rolled-back' })
     }
+    this.invalidateCache()
     return version
   }
 
   async listVersions(limit: number = 50): Promise<Version[]> {
+    const key = `listVersions:${limit}`
+    const cached = this.getCache<Version[]>(key)
+    if (cached !== null) return cached
     const files = await listDir(this.versionDir(), limit)
     const versions: Version[] = []
     for (const f of files) {
@@ -480,7 +536,9 @@ export class EvolutionStore {
       const data = await readJsonSafe(join(this.versionDir(), f))
       if (data && typeof data === 'object') versions.push(data as Version)
     }
-    return versions.sort((a, b) => a.number - b.number)
+    const sorted = versions.sort((a, b) => a.number - b.number)
+    this.setCache(key, sorted)
+    return sorted
   }
 
   async rollbackVersion(versionId: string): Promise<{ restored: Version; deactivated: Version | null; alreadyActive: boolean } | null> {
@@ -526,6 +584,7 @@ export class EvolutionStore {
       versionId: target.id,
       generation: observedGeneration + 1,
     } satisfies ActivePointer)
+    this.invalidateCache()
     return { restored: target, deactivated: active, alreadyActive: false }
   }
 
@@ -535,6 +594,7 @@ export class EvolutionStore {
     if (!existing) return null
     const updated = { ...existing, ...updates }
     await writeJsonAtomic(join(this.versionDir(), `${id}.json`), updated)
+    this.invalidateCache()
     return updated
   }
 }
