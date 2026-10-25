@@ -1,51 +1,66 @@
 # dsh-evolution
 
-Self-evolution system for DeepSeek Harness. Collects task experiences, detects patterns, generates improvement candidates, benchmarks them against baselines, and manages versioned promotion with rollback.
+**Evidence-driven self-evolution for DeepSeek Harness (DSH).**
 
-## Architecture
+dsh-evolution turns completed task experiences into traceable improvement candidates, evaluates them against benchmarks, and manages versioned promotion and rollback. It is designed to keep the evolution process inspectable: patterns link back to evidence, candidates are validated before promotion, and previously promoted versions remain available for recovery.
 
+> **Safety defaults:** automatic experience recording and the evolution trigger are enabled by default, while LLM-based candidate generation and promotion are disabled. Enable those capabilities deliberately after reviewing your environment and configuration.
+
+## How it works
+
+```text
+Completed tasks
+      │
+      ▼
+Experience store ──► Pattern analysis ──► Candidate generation
+                                               │
+                                               ▼
+                                      Validation & sandbox
+                                               │
+                                               ▼
+                                         Benchmark gate
+                                               │
+                                     ┌─────────┴─────────┐
+                                     ▼                   ▼
+                                  Promote              Reject
+                                     │
+                                     ▼
+                              Versioned activation
+                                     │
+                              Rollback when needed
 ```
-                    ┌─────────────────────────────────────┐
-                    │         Evolution Controller          │
-                    │    (evo_status, evo_run_cycle)        │
-                    └──────────┬──────────────────────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          │                    │                     │
-   ┌──────▼──────┐    ┌───────▼───────┐    ┌───────▼───────┐
-   │  Experience  │    │    Pattern    │    │   Candidate   │
-   │  Collector   │───▶│    Analyzer   │───▶│    Builder    │
-   │ 3 tools      │    │ 2 tools       │    │ 3 tools       │
-   └──────────────┘    └───────────────┘    └───────┬───────┘
-                                                     │
-                                            ┌────────▼────────┐
-                                            │    Benchmark    │
-                                            │     Runner      │
-                                            │ 4 tools         │
-                                            └────────┬────────┘
-                                                     │
-                                            ┌────────▼────────┐
-                                            │  Promotion Mgr  │
-                                            │ (promote/       │
-                                            │  rollback/list) │
-                                            │ 4 tools         │
-                                            └─────────────────┘
 
-Beyond this core loop: sandbox execution, the LLM candidate builder, automatic
-turn observation, and boot-time activation of the promoted version.
+1. **Capture experience.** Store task outcomes and relevant execution metadata as JSON records.
+2. **Find recurring patterns.** Analyze experience records for repeated signals and retain links to supporting evidence.
+3. **Build a candidate.** Create an improvement candidate; when enabled, the configured host LLM can generate its module files, tests, manifest, and benchmark cases.
+4. **Validate and evaluate.** Validate candidate files and run benchmark checks. Sandbox execution is available where the host supports it.
+5. **Manage versions.** Promotion is gated by configuration and benchmark evidence. Version artifacts can be activated at startup, and an earlier version can be restored with rollback.
 
-Storage: File-backed JSON in $DSH_HOME/dsh-evolution/
-  ├── experiences/    (append-only experience records)
-  ├── patterns/       (detected behavioral patterns)
-  ├── candidates/     (improvement candidates)
-  ├── benchmarks/     (benchmark run results)
-  ├── versions/       (immutable version history)
-  └── tmp/
-```
+## Key capabilities
+
+- **Evidence-linked analysis** — patterns can be traced to the experience records that support them.
+- **Candidate lifecycle management** — create, inspect, and list proposed changes.
+- **Benchmarking** — run threshold-based checks, compare results, and perform live or A/B benchmark runs.
+- **Controlled promotion** — promotion can be disabled by default and requires a candidate that passes the applicable checks.
+- **Version history and rollback** — keep versioned artifacts and restore a previous version when necessary.
+- **Sandboxed execution** — execute candidate-related commands through the configured sandbox; the dedicated sandbox tool requires Bubblewrap (`bwrap`) and refuses execution when it is unavailable.
+- **File-backed persistence** — human-readable JSON records; no separate database service is required.
+- **Runtime visibility** — inspect plugin status, health, observation state, and activation status.
+
+dsh-evolution generates and evaluates **module code**; it does not fine-tune or update model weights.
+
+## Requirements
+
+- Node.js **20 or later**
+- DeepSeek Harness (DSH) **0.1.1-rc.1 or later**
+- A configured host LLM endpoint is required for LLM-backed candidate generation and the complete autonomous cycle.
+- Bubblewrap (`bwrap`) is required for `evo_sandbox_exec`.
 
 ## Installation
 
-Add to your DSH profile's `package.json`:
+### 1. Add the package to your DSH profile
+
+For a local checkout, add the package to the profile's `package.json`:
 
 ```json
 {
@@ -55,144 +70,181 @@ Add to your DSH profile's `package.json`:
 }
 ```
 
-Add to `cordis.patch.yml`:
+Replace `/path/to/dsh-evolution` with the absolute path to your local clone.
+
+### 2. Register the bundle
+
+Add the following to the profile's `cordis.patch.yml`:
 
 ```yaml
 - insert:
-    id: dsh-evolution
-    config:
-      stateRoot: ''
-      inject: { enabled: true }
-      experience:
-        maxRecords: 10000
-        retentionDays: 90
-      candidate:
-        maxActive: 10
-      benchmark:
-        minRuns: 3
-        maxRuns: 10
-        improvementThreshold: 0.05
-        regressionThreshold: 0.10
+    - id: dsh-evolution
+      name: dsh-evolution
+      config:
+        evolution:
+          enabled: true
+          autoRecord: true
+          autoTrigger: true
+          analysis:
+            minExperiences: 20
+            minOccurrences: 5
+          generation:
+            enabled: false
+          promotion:
+            enabled: false
+          maxCyclesPerProcess: 3
 ```
 
-## Tools
-
-| Tool | Description |
-|------|-------------|
-| `evo_experience_record` | Record a completed task execution |
-| `evo_experience_list` | List recent experiences |
-| `evo_experience_inspect` | Get full details of one experience |
-| `evo_auto_record` | Record a task out-of-band (the host records turns automatically) |
-| `evo_observe_state` | Automatic observation state: turns observed, loop guard counters, thresholds |
-| `evo_analyze_patterns` | Detect recurring patterns from experiences |
-| `evo_analyze_report` | Summary report of all stored patterns |
-| `evo_candidate_create` | Create a new improvement candidate |
-| `evo_candidate_list` | List candidates with optional status filter |
-| `evo_candidate_inspect` | Get full details of one candidate |
-| `evo_builder_generate` | Use the configured host LLM to generate a candidate module (source, tests, manifest, benchmark cases); files are safety-validated before acceptance |
-| `evo_benchmark_run` | Benchmark a candidate against thresholds |
-| `evo_benchmark_compare` | Compare benchmark metrics to thresholds |
-| `evo_benchmark_live` | Execute a command in a live sandbox against a candidate's files (stdout, stderr, exit code, timing) |
-| `evo_benchmark_ab` | A/B benchmark a candidate against its baseline over multiple sandboxed runs |
-| `evo_promote` | Promote a benchmarked candidate to new version |
-| `evo_rollback` | Rollback to a previous version |
-| `evo_promote_list` | List all versions |
-| `evo_promote_decision` | Apply the promotion policy to the latest benchmark evidence; returns promote/reject with the justifying metrics |
-| `evo_status` | Show evolution status overview |
-| `evo_run_cycle` | Run one analysis/candidate generation cycle |
-| `evo_full_cycle` | Run the complete autonomous cycle (analyze, generate, validate, sandbox, benchmark, promote/reject); requires an LLM endpoint |
-| `evo_sandbox_exec` | Execute a shell command in a sandbox — requires bubblewrap (bwrap); the call is refused when it is unavailable |
-| `evo_activation_status` | Report which version artifact is mounted, which tool it registered, and why activation did not happen |
-| `evo_activation_refresh` | Re-read the active version and mount or unmount its artifact |
-| `evo_health` | Plugin health check |
-
-## Example Evolution Run
-
-### v1: Initial Baseline
-
-```
-1. Record experiences:
-   evo_experience_record(success=true, prompt="fix login bug", score=0.9, stepCount=3)
-   evo_experience_record(success=false, prompt="deploy service", errors=["timeout"])
-   evo_experience_record(success=false, prompt="deploy service", errors=["timeout"])
-   evo_experience_record(success=false, prompt="deploy service", errors=["timeout"])
-
-2. Analyze patterns:
-   evo_analyze_patterns(minOccurrences=3)
-   → Detected: "Recurring signature observed 3 times: timeout" (confidence: 0.55)
-
-3. Create candidate:
-   evo_candidate_create(type="retry-strategy", name="Deploy retry policy",
-     description="Add retry with backoff for deploy timeouts",
-     reason="3 deploy timeouts observed", parentVersion="v1")
-
-4. Benchmark:
-   evo_benchmark_run(candidateId="abc123")
-   → Passed: all metrics within thresholds
-
-5. Promote:
-   evo_promote(candidateId="abc123", reason="Benchmark passed")
-   → Created v2, v1 marked rolled-back
-```
-
-### Rollback
-
-```
-evo_rollback(versionId="v1")
-→ v1 restored to active, v2 marked rolled-back
-```
-
-## Data Flow
-
-```
-Completed Task
-    │
-    ▼
-Experience Record ──▶ experiences/*.json
-    │
-    ▼
-Pattern Analyzer ──▶ patterns/*.json
-    │                (FACT / INFERENCE / HYPOTHESIS)
-    ▼
-Candidate Builder ──▶ candidates/*.json
-    │
-    ▼
-Benchmark Runner ──▶ benchmarks/*.json
-    │
-    ▼
-Promotion Manager ──▶ versions/*.json (immutable)
-    │
-    ▼
-New Active Version ──▶ Previous version preserved for rollback
-```
-
-## Design Principles
-
-- **Immutable versions**: Once created, version records are never modified
-- **Append-only experience store**: Old records are never overwritten
-- **Evidence-based evolution**: Every pattern must cite experience IDs
-- **Threshold-gated promotion**: Candidates must pass benchmarks before promotion
-- **Rollback-safe**: Any version can be restored without data loss
-- **File-backed persistence**: No database dependency, human-readable JSON
-- **No automatic fine-tuning**: Agent generates module code, not model weights
-
-## Testing
-
-```bash
-npm test
-```
-
-151 tests across 14 files covering lib utilities, store operations, tool definitions, and end-to-end evolution cycles.
+These are the shipped baseline values. Review the options below before enabling generation or promotion. The profile's patch mechanism is sensitive to row shape; use the same top-level row structure when overriding this configuration.
 
 ## Configuration
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `experience.maxRecords` | 10000 | Maximum stored experiences — **declared but not enforced**: nothing reads this key yet, so `experiences/` grows one file per recorded turn |
-| `experience.retentionDays` | 90 | Days before experience cleanup — **declared but not enforced**, see `maxRecords` |
-| `candidate.maxActive` | 10 | Maximum draft candidates |
-| `benchmark.minRuns` | 3 | Minimum benchmark runs |
-| `benchmark.maxRuns` | 10 | Maximum benchmark runs |
-| `benchmark.improvementThreshold` | 0.05 | Required improvement for promotion |
-| `benchmark.regressionThreshold` | 0.10 | Allowed regression before rejection |
-| `evolution.maxCyclesPerProcess` | 3 | Hard cap on autonomous cycles per host process (loop safety); a failed (exception) cycle no longer consumes a slot |
+The defaults below reflect the plugin's declared configuration. Generation and promotion deliberately default to `false`.
+
+| Option | Default | Purpose |
+|---|---:|---|
+| `stateRoot` | `""` | Optional explicit state directory. When empty, the plugin resolves the root using the host and environment configuration. |
+| `inject.enabled` | `true` | Injection setting exposed by the plugin configuration. |
+| `evolution.enabled` | `true` | Master switch for the autonomous evolution loop. |
+| `evolution.autoRecord` | `true` | Record completed turns automatically. |
+| `evolution.autoTrigger` | `true` | Allow automatic evolution-cycle triggers. |
+| `evolution.analysis.minExperiences` | `20` | Completed experiences required before analysis can run. |
+| `evolution.analysis.minOccurrences` | `5` | Occurrences required for a signature to count as recurring. |
+| `evolution.generation.enabled` | `false` | Permit LLM-backed candidate generation. |
+| `evolution.promotion.enabled` | `false` | Permit the autonomous promotion path. |
+| `evolution.maxCyclesPerProcess` | `3` | Per-process cap for autonomous cycles. |
+| `experience.maxRecords` | `10000` | Declared experience-retention limit. **Not currently enforced.** |
+| `experience.retentionDays` | `90` | Declared retention period. **Not currently enforced.** |
+| `candidate.maxActive` | `10` | Declared limit for active draft candidates. |
+| `benchmark.minRuns` | `3` | Configured minimum number of benchmark runs. |
+| `benchmark.maxRuns` | `10` | Configured maximum number of benchmark runs. |
+| `benchmark.improvementThreshold` | `0.05` | Configured improvement threshold. |
+| `benchmark.regressionThreshold` | `0.10` | Configured regression threshold. |
+
+The experience limits are currently configuration declarations, not enforced storage policies. Experience records can therefore continue to accumulate. Plan for disk usage accordingly.
+
+### Disabling automatic evolution
+
+To stop automatic recording and autonomous triggers, override the bundle's row configuration with the required fields restated. The `evo_*` tools remain registered and can still be invoked manually when `evolution.enabled` is false. To remove those tools as well, remove the bundle from the DSH profile.
+
+```yaml
+- id: dsh-evolution
+  config:
+    evolution:
+      enabled: false
+      autoRecord: false
+      autoTrigger: false
+      analysis:
+        minExperiences: 20
+        minOccurrences: 5
+      generation:
+        enabled: false
+      promotion:
+        enabled: false
+      maxCyclesPerProcess: 3
+```
+
+## Tool reference
+
+Tools are grouped by task rather than listed as one long catalog.
+
+### Experience and observation
+
+| Tool | Purpose |
+|---|---|
+| `evo_experience_record` | Record a completed task execution. |
+| `evo_experience_list` | List recent experience records. |
+| `evo_experience_inspect` | Inspect a specific experience record. |
+| `evo_auto_record` | Record an experience explicitly outside the automatic observer. |
+| `evo_observe_state` | Inspect automatic observation counters and loop-guard state. |
+
+### Analysis and candidates
+
+| Tool | Purpose |
+|---|---|
+| `evo_analyze_patterns` | Detect recurring patterns in stored experiences. |
+| `evo_analyze_report` | Summarize detected patterns. |
+| `evo_candidate_create` | Create an improvement candidate. |
+| `evo_candidate_list` | List candidates, optionally filtered by status. |
+| `evo_candidate_inspect` | Inspect a candidate. |
+| `evo_builder_generate` | Generate candidate module files using the configured host LLM; generated files are validated before acceptance. |
+
+### Benchmarks and promotion
+
+| Tool | Purpose |
+|---|---|
+| `evo_benchmark_run` | Run a candidate benchmark against configured checks. |
+| `evo_benchmark_compare` | Compare benchmark metrics against thresholds. |
+| `evo_benchmark_live` | Run a command in a live sandbox and return output, exit code, and timing. |
+| `evo_benchmark_ab` | Compare a candidate with its baseline across multiple sandboxed runs. |
+| `evo_promote_decision` | Evaluate the latest benchmark evidence against the promotion policy. |
+| `evo_promote` | Promote an eligible, benchmarked candidate to a new version. |
+| `evo_promote_list` | List version history. |
+| `evo_rollback` | Restore a previous version. |
+
+### Runtime and diagnostics
+
+| Tool | Purpose |
+|---|---|
+| `evo_status` | Show an evolution status overview. |
+| `evo_run_cycle` | Run one analysis/candidate-generation cycle. |
+| `evo_full_cycle` | Run the complete autonomous cycle; requires an LLM endpoint and appropriate generation/promotion configuration. |
+| `evo_sandbox_exec` | Execute a shell command in a Bubblewrap sandbox; refuses to run if `bwrap` is unavailable. |
+| `evo_activation_status` | Inspect active artifact and activation diagnostics. |
+| `evo_activation_refresh` | Refresh activation from the selected version artifact. |
+| `evo_health` | Check plugin health. |
+
+## Data and persistence
+
+By default, state is stored under `$DSH_HOME/dsh-evolution/` (profile-scoped when the host exposes a profile path). Set `stateRoot` to use an explicit state directory.
+
+```text
+dsh-evolution/
+├── experiences/   # Task execution records
+├── patterns/      # Detected behavioral patterns
+├── candidates/    # Proposed improvements and candidate files
+├── benchmarks/    # Benchmark results
+├── versions/      # Version records and activation artifacts
+└── tmp/           # Temporary files
+```
+
+The store is file-backed and uses JSON, so records can be inspected with standard tools. Experience records are append-oriented, while version history is managed as versioned records. A promoted artifact is validated and preflighted before it can become active; activation is refreshed at startup and after version changes.
+
+## Development
+
+Install dependencies and run the available checks:
+
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build
+```
+
+The default test command is `vitest run --exclude test/real-agnes-experiment.spec.ts`. The live experiment is separate and can be run with:
+
+```bash
+npm run test:live
+```
+
+The live experiment may require a working DSH environment and configured model endpoint.
+
+## Design principles
+
+- **Evidence before conclusions:** pattern analysis is grounded in stored experiences.
+- **Validation before activation:** generated candidate files are checked before acceptance and promotion.
+- **Explicit safety controls:** generation and autonomous promotion are disabled by default.
+- **Versioned recovery:** previous versions can be restored.
+- **Operational transparency:** status and activation tools expose runtime state and failure reasons.
+- **No model-weight updates:** evolution targets modular code, not fine-tuning.
+
+## Known limitations
+
+- `experience.maxRecords` and `experience.retentionDays` are declared defaults but are not currently enforced; stored experience files can accumulate.
+- Full autonomous generation requires a working host LLM endpoint.
+- The sandbox command requires Bubblewrap (`bwrap`); it is refused when that dependency is unavailable.
+- Automatic generation and promotion are separate opt-in settings and are off by default.
+
+## License
+
+MIT — see `package.json`.
