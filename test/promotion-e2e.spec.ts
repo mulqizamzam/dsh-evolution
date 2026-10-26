@@ -25,10 +25,10 @@ describe('E2E: realistic promotion safety experiment', () => {
         const createdAt = isoDateTime(new Date(Date.now() - 86400000))
         const command = 'node candidate-under-test.js'
         await store.addBenchmark({
-          candidateId: v1.id, version: 'v1', baseline: 'unknown', runs: 20,
+          candidateId: v1.id, version: 'v0', baseline: 'unknown', runs: 20,
           metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 200 },
           passed: true, details: 'v1', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v1.id, 'v1', command, createdAt),
+          provenance: createLiveProvenance(v1.id, 'v0', command, createdAt),
         }, createdAt)
       }
       await store.createVersion({ label: 'v1-good', reason: 'release', promotedFrom: 'v0', modules: [v1.id] })
@@ -45,10 +45,10 @@ describe('E2E: realistic promotion safety experiment', () => {
         const createdAt = isoDateTime(new Date())
         const command = 'node candidate-under-test.js'
         await store.addBenchmark({
-          candidateId: v2.id, version: 'v2', baseline: 'unknown', runs: 20,
+          candidateId: v2.id, version: 'v1', baseline: 'unknown', runs: 20,
           metrics: { successRate: 0.86, avgScore: 0.86, errorRate: 0.08, avgSteps: 5, avgDurationMs: 210 },
           passed: true, details: 'v2', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v2.id, 'v2', command, createdAt),
+          provenance: createLiveProvenance(v2.id, 'v1', command, createdAt),
         }, createdAt)
       }
 
@@ -64,10 +64,10 @@ describe('E2E: realistic promotion safety experiment', () => {
         const createdAt = isoDateTime(new Date())
         const command = 'node candidate-under-test.js'
         await store.addBenchmark({
-          candidateId: v3.id, version: 'v3', baseline: 'unknown', runs: 20,
+          candidateId: v3.id, version: 'v2', baseline: 'unknown', runs: 20,
           metrics: { successRate: 0.98, avgScore: 0.98, errorRate: 0.01, avgSteps: 4, avgDurationMs: 190 },
           passed: true, details: 'v3', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v3.id, 'v3', command, createdAt),
+          provenance: createLiveProvenance(v3.id, 'v2', command, createdAt),
         }, createdAt)
       }
 
@@ -83,10 +83,10 @@ describe('E2E: realistic promotion safety experiment', () => {
         const createdAt = isoDateTime(new Date())
         const command = 'node candidate-under-test.js'
         await store.addBenchmark({
-          candidateId: v4.id, version: 'v4', baseline: 'unknown', runs: 20,
+          candidateId: v4.id, version: 'v3', baseline: 'unknown', runs: 20,
           metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 200 },
           passed: true, details: 'v4', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v4.id, 'v4', command, createdAt),
+          provenance: createLiveProvenance(v4.id, 'v3', command, createdAt),
         }, createdAt)
       }
 
