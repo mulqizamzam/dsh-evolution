@@ -11,14 +11,10 @@ import { createHash } from 'node:crypto'
  * createdAt) no longer match the stored seal produces a consistency
  * mismatch and is rejected at the promotion boundary.
  *
- * **Scope limitation:** the seal covers execution-context fields only. It
- * does NOT cover the `metrics` blob — an attacker who edits
- * `metrics.successRate` on an existing sealed record without touching the
- * four sealed fields will still pass seal verification.  This is the
- * documented residual risk of the minimal M3.3 mechanism; closing it would
- * require extending the seal to incorporate a metrics hash, which would
- * invalidate all pre-existing sealed records and is deliberately out of
- * scope.
+ * **Scope limitation:** this legacy seal covers execution-context fields
+ * only; it is not a signature and does not independently authenticate a run.
+ * The current promotion gate separately verifies the store-generated full-record
+ * attestation, which binds metrics and all other persisted fields.
  *
  * The command is the trusted operator-provided shell command executed in
  * the sandbox.  createdAt is the authoritative timestamp for the record —
@@ -102,7 +98,7 @@ export function createBenchmarkAttestation(record: Record<string, unknown>): str
   const payload = { ...record }
   delete payload.attestation
   return createHash('sha256')
-    .update('dsh-evolution-benchmark-attestation-v1\\n' + canonicalJson(payload))
+    .update('dsh-evolution-benchmark-attestation-v1\n' + canonicalJson(payload))
     .digest('hex')
 }
 
