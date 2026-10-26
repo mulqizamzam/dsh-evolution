@@ -41,6 +41,7 @@ Experience store ──► Pattern analysis ──► Candidate generation
 - **Evidence-linked analysis** — patterns can be traced to the experience records that support them.
 - **Candidate lifecycle management** — create, inspect, and list proposed changes.
 - **Benchmarking** — run threshold-based checks, compare results, and perform live or A/B benchmark runs.
+- **Red Team promotion gate** — every new candidate promotion requires PASS from a fail-closed evidence-integrity gate; missing or unverifiable evidence blocks promotion with per-check reasons.
 - **Controlled promotion** — autonomous promotion is disabled by default and depends on benchmark evidence.
 - **Version history and rollback** — versioned artifacts support recovery to a prior version.
 - **Sandboxed execution** — the dedicated sandbox tool requires Bubblewrap (`bwrap`) and refuses execution when it is unavailable.
