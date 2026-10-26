@@ -339,7 +339,7 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       // → re-derivation uses v2.id → mismatch → rejected
       expect(result.ok).toBe(false)
       if (!result.ok) {
-        expect(result.error).toMatch(/provenance.*mismatch|consistency/i)
+        expect(result.error).toMatch(/red-team promotion gate FAIL|provenance.*seal|candidate-parent-binding/i)
       }
     } finally { await rm(root, { recursive: true, force: true }) }
   })
@@ -362,11 +362,16 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       const candidate = await store.getCandidate(v2Id)!
       const result = await evaluatePromotionPolicy(deps, candidate)
 
-      // Both policy and tool paths must reject the tampered persisted record.      const { promoteTools } = await import('../src/host/modules/promote/tools.ts')
+      // Both policy and tool paths must reject the tampered persisted record.
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toMatch(/red-team promotion gate|attestation/i)
+
+      const { promoteTools } = await import('../src/host/modules/promote/tools.ts')
       const tool = promoteTools(deps).find(t => t.name === 'evo_promote')!
-      const toolResult = await tool.execute({ candidateId: v2Id } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; error?: string }
+      const toolResult = await tool.execute({ candidateId: v2Id } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; error?: string; redTeamGate?: { verdict: string } }
 
       expect(toolResult.ok).toBe(false)
+      expect(toolResult.redTeamGate?.verdict).toMatch(/FAIL|INCONCLUSIVE/)
       if (!toolResult.ok) expect(toolResult.error).toMatch(/red-team promotion gate|attestation|provenance/i)
     } finally { await rm(root, { recursive: true, force: true }) }
   })
