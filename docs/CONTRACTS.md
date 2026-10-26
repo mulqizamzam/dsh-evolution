@@ -260,6 +260,9 @@ and the benchmark record ID when available.
   advisory `evo_promote_decision` must all use or report this same gate.
   `evo_promote_decision` must not recommend promotion when the gate is not
   PASS.
+- A benchmark must also bind to the candidate's immutable `parentVersion`:
+  the benchmark's `version` and any supplied `parentVersion` must match that
+  creation-time parent, preventing cross-version evidence replay.
 - The gate does not replace the existing comparative `beats_active` policy,
   artifact validation, activation pre-flight, or sandbox controls. Those gates
   still run after a PASS.
