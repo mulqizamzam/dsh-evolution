@@ -4,6 +4,7 @@ import { DEFAULT_PROMOTION_POLICY } from '../../types.ts'
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
 import { evaluatePromotionPolicy, executePromotion } from './index.ts'
+import { evaluateRedTeamPromotionGate, redTeamGateError } from './red-team.ts'
 const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'text'; text: string }> => text(value)
 
 export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
@@ -30,27 +31,14 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
         if (candidate.status !== 'benchmarked') {
           return neutralizeDeep({ ok: false, error: 'candidate ' + candidateId + ' is ' + candidate.status + '; must be benchmarked before promotion' })
         }
-        // Verify evidence trust boundary: candidate's latest benchmark must be live.
-        // Simulated evidence cannot promote (contract C-1, docs/CONTRACTS.md) —
-        // this closes the trust boundary gap.
-        const allBenchmarks = await store.listBenchmarks(500)
-        const candidateBenchmarks = allBenchmarks
-          .filter(b => b.candidateId === candidateId)
-          .sort((a, b) => a.createdAt > b.createdAt ? -1 : 1)
-        const latestEvidence = candidateBenchmarks[0]
-        if (!latestEvidence || latestEvidence.mode !== 'live') {
-          return neutralizeDeep({
-            ok: false,
-            error: 'candidate has no live benchmark evidence; run evo_benchmark_live or evo_benchmark_ab before promoting (simulated evidence cannot promote)',
-          })
-        }
+        // The shared promotion policy returns the full Red Team gate report.
         // ── Step 1: Policy evaluation (pure read, no state mutation) ──
         // This is the authoritative beats_active gate. If it fails, NO version
         // record is created, NO artifact is materialized, and NO activation
         // state changes. The currently active version/tool remains untouched.
         const policyResult = await evaluatePromotionPolicy(deps, candidate)
         if (!policyResult.ok) {
-          return neutralizeDeep({ ok: false, error: policyResult.error })
+          return neutralizeDeep({ ok: false, error: policyResult.error, redTeamGate: policyResult.redTeamGate })
         }
 
         // ── Step 2: Compute the version id that executePromotion will create ──
@@ -216,7 +204,7 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
         type: 'object',
         properties: {
           candidateId: { type: 'string', description: 'The candidate id to evaluate for promotion.' },
-          allowSimulated: { type: 'boolean', description: 'Allow a decision from simulated evidence. Defaults to false: simulated runs are not execution evidence and cannot promote a candidate unless this is explicitly set.' },
+          allowSimulated: { type: 'boolean', description: 'Legacy advisory option only; it cannot bypass the Red Team promotion gate or make simulated evidence eligible.' },
         },
         required: ['candidateId'],
       },
@@ -229,11 +217,23 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
         const candidate = await store.getCandidate(candidateId)
         if (!candidate) return neutralizeDeep({ ok: false, error: 'no candidate ' + candidateId })
 
+        // The decision tool must never advise promotion when the shared runtime
+        // gate would block it. allowSimulated is advisory only and cannot bypass
+        // this trust boundary.
+        const redTeamGate = await evaluateRedTeamPromotionGate(deps, candidate)
+        if (redTeamGate.verdict !== 'PASS') {
+          return neutralizeDeep({
+            ok: false,
+            candidateId,
+            recommendation: 'REJECT',
+            redTeamGate,
+            error: redTeamGateError(redTeamGate),
+          })
+        }
+
         // Find latest benchmark for this candidate
         const allBenchmarks = await store.listBenchmarks(500)
-        const candidateBenchmarks = allBenchmarks
-          .filter(b => b.candidateId === candidateId)
-          .sort((a, b) => a.createdAt > b.createdAt ? -1 : 1)
+        const candidateBenchmarks = await store.listBenchmarksByCandidate(candidateId, true)
         const latest = candidateBenchmarks[0]
         if (!latest) {
           return neutralizeDeep({
@@ -357,6 +357,7 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           ok: true,
           candidateId,
           recommendation: promote ? 'PROMOTE' : 'REJECT',
+          redTeamGate,
           evidenceMode,
           benchmarkRunId: latest.id,
           thresholds: thresholdCfg,
