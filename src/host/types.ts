@@ -115,6 +115,8 @@ export interface BenchmarkRun {
    * field was introduced.
    */
   provenance?: string
+  /** Integrity digest binding all stored benchmark fields, including metrics and outcomes. */
+  attestation?: string
   /** Baseline side metrics for an A/B run. */
   baselineMetrics?: BenchmarkMetrics
   /** Comparative deltas for an A/B run. */
