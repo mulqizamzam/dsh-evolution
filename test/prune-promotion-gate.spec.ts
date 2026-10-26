@@ -82,10 +82,10 @@ describe('Promotion gate ordering — evaluate before mutation', () => {
         const createdAt = isoDateTime(new Date())
         const command = 'node candidate-under-test.js'
         await store.addBenchmark({
-          candidateId: v2.id, version: 'v2', baseline: 'unknown', runs: 20,
+          candidateId: v2.id, version: 'v1', baseline: 'unknown', runs: 20,
           metrics: { successRate: 0.86, avgScore: 0.86, errorRate: 0.08, avgSteps: 5, avgDurationMs: 210 },
           passed: true, details: 'v2', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v2.id, 'v2', command, createdAt),
+          provenance: createLiveProvenance(v2.id, 'v1', command, createdAt),
         }, createdAt)
       }
 
@@ -147,10 +147,10 @@ describe('Promotion gate ordering — evaluate before mutation', () => {
         const createdAt = isoDateTime(new Date())
         const command = 'node candidate-under-test.js'
         await store.addBenchmark({
-          candidateId: v2.id, version: 'v2', baseline: 'unknown', runs: 20,
+          candidateId: v2.id, version: 'v1', baseline: 'unknown', runs: 20,
           metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0.01, avgSteps: 4, avgDurationMs: 190 },
           passed: true, details: 'v2', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v2.id, 'v2', command, createdAt),
+          provenance: createLiveProvenance(v2.id, 'v1', command, createdAt),
         }, createdAt)
       }
 
