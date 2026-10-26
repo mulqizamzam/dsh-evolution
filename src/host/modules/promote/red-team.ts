@@ -143,7 +143,14 @@ async function persistReport(
   deps: ModuleDeps,
   gate: RedTeamGateReport,
 ): Promise<RedTeamGateReport> {
-  const { auditRecordId: _ignored, ...record } = gate
+  const record = {
+    candidateId: gate.candidateId,
+    benchmarkRunId: gate.benchmarkRunId,
+    checkedAt: gate.checkedAt,
+    verdict: gate.verdict,
+    blocked: gate.blocked,
+    checks: gate.checks,
+  }
   try {
     const saved = await deps.store.addPromotionGateRun(record)
     return { ...gate, auditRecordId: saved.id }
