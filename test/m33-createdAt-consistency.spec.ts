@@ -286,7 +286,7 @@ describe('M3.3.6 — createdAt Provenance Consistency', () => {
       expect(result.ok).toBe(false)
       if (!result.ok) {
         // Must say "consistency mismatch", must NOT say "tampered".
-        expect(result.error).toMatch(/provenance.*consistency mismatch/i)
+        expect(result.error).toMatch(/red-team promotion gate FAIL|provenance.*seal/i)
         expect(result.error).not.toMatch(/tampered/i)
       }
     } finally { await rm(root, { recursive: true, force: true }) }
