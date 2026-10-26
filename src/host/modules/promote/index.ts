@@ -153,7 +153,8 @@ export async function executePromotion(
   // When plannedVersionId is non-empty AND matches what createVersion will
   // assign, the evo_promote pre-flight has already materialized the artifact
   // under that id.  In that case we only need to re-validate before proceeding.
-  const { access } = await import('node:fs/promises')
+  const { access, rm } = await import('node:fs/promises')
+  let materializedVersionId = plannedVersionId
   const manifestPath = join(store.getRoot(), 'versions', plannedVersionId, 'manifest.json')
   const artifactPreExists = plannedVersionId !== '' &&
     (await access(manifestPath).then(() => true).catch(() => false))
@@ -181,17 +182,26 @@ export async function executePromotion(
       status: 'active' as const,
       modules: [candidate.id],
     }
-    const { rm } = await import('node:fs/promises')
+    materializedVersionId = probeVersion.id
     await rm(join(store.getRoot(), 'versions', probeVersion.id), { recursive: true, force: true })
     await materializeArtifact(store.getRoot(), probeVersion, candidate, { baseVersionId })
     const validation = await validateArtifact(store.getRoot(), probeVersion.id)
     if (!validation.valid) {
       // Clean up the orphaned artifact directory so it does not leak disk space.
-      const { rm } = await import('node:fs/promises')
       await rm(join(store.getRoot(), 'versions', probeVersion.id), { recursive: true, force: true })
       throw new Error('version artifact did not validate: ' + validation.errors.join('; '))
     }
   }
+
+  // Re-evaluate immediately before persisted state mutation. This closes the
+  // pre-flight window in which benchmark evidence or the active baseline could
+  // have changed after the initial policy decision.
+  const finalPolicy = await evaluatePromotionPolicy(deps, candidate)
+  if (!finalPolicy.ok) {
+    await rm(join(store.getRoot(), 'versions', materializedVersionId), { recursive: true, force: true })
+    throw new Error('promotion aborted by final Red Team/policy recheck: ' + finalPolicy.error)
+  }
+  capturedActiveMetrics = finalPolicy.activeMetrics
 
   // ── Now it is safe to mutate persisted state ──
   const version = await store.createVersion({
@@ -204,9 +214,8 @@ export async function executePromotion(
   await store.updateCandidate(candidate.id, { status: 'promoted' })
 
   // If the real version id differs from what was materialized, re-materialize
-  // under the correct id.  This is the fallback path for callers that passed
-  // an empty plannedVersionId (e.g. legacy runPromotionPolicy from evo_full_cycle).
-  const { rm } = await import('node:fs/promises')
+  // under the correct id. This is the fallback path for callers that passed an
+  // empty plannedVersionId (e.g. legacy runPromotionPolicy from evo_full_cycle).
   const expectedArtifactPath = join(store.getRoot(), 'versions', version.id)
   const artifactAtRealId = await access(join(expectedArtifactPath, 'manifest.json')).then(() => true).catch(() => false)
   if (!artifactAtRealId && version.id !== plannedVersionId) {
