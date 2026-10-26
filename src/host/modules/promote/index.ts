@@ -4,6 +4,7 @@ import { isSafeKey } from '../../../lib/ids.ts'
 import { createLiveProvenance, verifyLiveProvenance } from '../../../lib/provenance.ts'
 import type { ModuleDeps, Version, CandidateModule } from '../../types.ts'
 import { promoteTools } from './tools.ts'
+import { evaluateRedTeamPromotionGate, redTeamGateError, type RedTeamGateReport } from './red-team.ts'
 
 export const name = 'promote'
 export const TOOLS = ['evo_promote', 'evo_rollback', 'evo_promote_list', 'evo_promote_decision'] as const
@@ -36,8 +37,17 @@ export const writeEndpoints = {}
 export async function evaluatePromotionPolicy(
   deps: ModuleDeps,
   candidate: CandidateModule,
-): Promise<{ ok: true; activeMetrics: import('../../types.ts').BenchmarkMetrics | undefined } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; activeMetrics: import('../../types.ts').BenchmarkMetrics | undefined; redTeamGate: RedTeamGateReport }
+  | { ok: false; error: string; redTeamGate: RedTeamGateReport }
+> {
   const store = deps.store
+  // This is the shared fail-closed gate for manual and automatic promotion.
+  // INCONCLUSIVE is deliberately not promotable.
+  const redTeamGate = await evaluateRedTeamPromotionGate(deps, candidate)
+  if (redTeamGate.verdict !== 'PASS') {
+    return { ok: false, error: redTeamGateError(redTeamGate), redTeamGate }
+  }
 
   // ── beats_active gate (comparative promotion safety) ──
   // Find the active version's latest live benchmark metrics to compare
@@ -75,6 +85,7 @@ export async function evaluatePromotionPolicy(
     return {
       ok: false,
       error: `promotion rejected: candidate has only simulated evidence (mode=simulated); run evo_benchmark_live or evo_benchmark_ab to produce execution evidence before promoting`,
+      redTeamGate,
     }
   }
 
@@ -100,6 +111,7 @@ export async function evaluatePromotionPolicy(
             error: candidateLatest.provenance
               ? 'provenance consistency mismatch: stored seal does not match the record fields; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence'
               : 'live benchmark provenance seal missing: no provenance on record; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence',
+            redTeamGate,
           }
         }
       }
@@ -110,11 +122,12 @@ export async function evaluatePromotionPolicy(
       return {
         ok: false,
         error: `beats_active gate failed: candidate success rate ${(candidateSuccessRate * 100).toFixed(1)}% is not greater than active version ${(activeSuccessRate * 100).toFixed(1)}%`,
+        redTeamGate,
       }
     }
   }
 
-  return { ok: true, activeMetrics: capturedActiveMetrics }
+  return { ok: true, activeMetrics: capturedActiveMetrics, redTeamGate }
 }
 
 /**
@@ -232,12 +245,15 @@ export async function runPromotionPolicy(
   candidate: CandidateModule,
   reason: string,
   plannedVersionId: string,
-): Promise<{ ok: true; version: Version } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; version: Version; redTeamGate: RedTeamGateReport }
+  | { ok: false; error: string; redTeamGate: RedTeamGateReport }
+> {
   const evaluation = await evaluatePromotionPolicy(deps, candidate)
   if (!evaluation.ok) return evaluation
 
   const { ok, version } = await executePromotion(deps, candidate, reason, plannedVersionId, evaluation.activeMetrics)
-  return { ok, version }
+  return { ok, version, redTeamGate: evaluation.redTeamGate }
 }
 
 export function apply(deps: ModuleDeps): void {
