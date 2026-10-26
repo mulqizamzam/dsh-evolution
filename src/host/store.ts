@@ -200,22 +200,38 @@ export class EvolutionStore {
   }
 
   async listExperiences(limit: number = 50): Promise<ExperienceRecord[]> {
+    // Per-limit cache entry: callers with the same limit get the same array
+    // reference within one TTL window (pinned by store-cache.spec.ts).
     const key = `listExperiences:${limit}`
     const cached = this.getCache<ExperienceRecord[]>(key)
     if (cached !== null) return cached
-    const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
-    let records: ExperienceRecord[]
-    try {
-      await (await import('node:fs/promises')).access(jsonlPath)
-      records = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
-    } catch {
-      // .jsonl doesn't exist yet — migrate from individual files.
-      await this.ensureJsonlExists()
-      records = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
+
+    // One canonical, fully-sorted array per TTL window. Callers ask for many
+    // different limits (50/500/5000/10000 across the modules), and parsing plus
+    // sorting the whole batch file once per limit made read cost scale with
+    // (dataset × distinct limits). The base is parsed once and every limit
+    // slices it; record objects are shared and treated as immutable.
+    const baseKey = 'listExperiences:__all__'
+    let all = this.getCache<ExperienceRecord[]>(baseKey)
+    if (all === null) {
+      const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
+      let records: ExperienceRecord[]
+      try {
+        await (await import('node:fs/promises')).access(jsonlPath)
+        records = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
+      } catch {
+        // .jsonl doesn't exist yet — migrate from individual files.
+        await this.ensureJsonlExists()
+        records = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
+      }
+      // Sort by timestamp descending (newest first) to match listDir ordering.
+      records.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      all = records
+      this.setCache(baseKey, all)
     }
-    // Sort by timestamp descending (newest first) to match listDir ordering.
-    records.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-    const result = records.slice(0, limit)
+    // Always a fresh array per distinct limit: the result is never the base
+    // array itself, so a caller cannot mutate the shared cache.
+    const result = all.slice(0, limit)
     this.setCache(key, result)
     return result
   }
