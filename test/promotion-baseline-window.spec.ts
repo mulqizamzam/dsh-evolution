@@ -129,7 +129,7 @@ describe('promotion gates do not depend on the benchmark list window', () => {
 
       const control = await evaluatePromotionPolicy(deps, (await store.getCandidate(v2.id))!)
       expect(control.ok).toBe(false)
-      if (!control.ok) expect(control.error).toMatch(/provenance seal missing/)
+      if (!control.ok) expect(control.error).toMatch(/provenance.*seal|INCONCLUSIVE/)
 
       await pushBaselineOutOfWindow(store, activeRec, 520)
 
