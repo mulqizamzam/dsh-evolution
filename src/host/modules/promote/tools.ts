@@ -13,7 +13,7 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
   return [
     defineTool({
       name: 'evo_promote',
-      description: 'Promote a benchmarked candidate only after the shared Red Team evidence-integrity gate and all existing promotion checks pass. The previous active version is marked rolled-back.'
+      description: 'Promote a benchmarked candidate only after the shared Red Team evidence-integrity gate and all existing promotion checks pass. The previous active version is marked rolled-back.',
       parameters: {
         type: 'object',
         properties: {
