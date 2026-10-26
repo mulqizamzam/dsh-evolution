@@ -7,6 +7,7 @@ import { resolveConfig } from '../src/host/config.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
 import { promoteTools } from '../src/host/modules/promote/tools.ts'
+import { evolutionTools } from '../src/host/modules/evolution/tools.ts'
 
 // These tests exercise promotion-switch policy, not the sandbox itself.
 // Sandbox pre-flight has separate coverage; keep this policy test independent
@@ -21,6 +22,25 @@ vi.mock('../src/host/modules/activation/loader.ts', () => ({
   refreshActivation: vi.fn(async () => {}),
 }))
 
+vi.mock('../src/host/modules/builder/tools.ts', () => ({
+  builderTools: (deps: { store: EvolutionStore }) => [{
+    name: 'evo_builder_generate',
+    execute: async () => {
+      const candidates = await deps.store.listCandidates(500)
+      const candidate = candidates.find(c => c.status === 'draft' && c.name.startsWith('auto: '))
+      if (!candidate) throw new Error('expected evo_full_cycle to create a draft candidate')
+      return { ok: true, candidateId: candidate.id, validation: { valid: true, errors: [] } }
+    },
+  }],
+}))
+
+vi.mock('../src/host/modules/benchmark/tools.ts', () => ({
+  benchmarkTools: () => [
+    { name: 'evo_benchmark_live', execute: async () => ({ ok: true, passed: true }) },
+    { name: 'evo_benchmark_run', execute: async () => ({ ok: true, passed: true }) },
+  ],
+}))
+
 const BENCHMARK_CONFIG = {
   successRate: { min: 0.8, weight: 1 },
   avgScore: { min: 0.7, weight: 1 },
@@ -29,7 +49,7 @@ const BENCHMARK_CONFIG = {
   avgDurationMs: { max: 60_000, weight: 0.5 },
 }
 
-function makeDeps(store: EvolutionStore, root: string): ModuleDeps {
+function makeDeps(store: EvolutionStore, root: string, generationEnabled = false): ModuleDeps {
   return {
     ctx: {
       tools: { register: () => {} },
@@ -41,7 +61,10 @@ function makeDeps(store: EvolutionStore, root: string): ModuleDeps {
     },
     cfg: () => resolveConfig({
       stateRoot: root,
-      evolution: { promotion: { enabled: false } },
+      evolution: {
+        generation: { enabled: generationEnabled },
+        promotion: { enabled: false },
+      },
     }),
     store,
     log: () => {},
@@ -86,6 +109,48 @@ async function addCandidateWithLiveEvidence(store: EvolutionStore) {
 }
 
 describe('evolution.promotion.enabled switch semantics', () => {
+  it('blocks automatic promotion inside evo_full_cycle when the switch is disabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'evo-full-cycle-switch-'))
+    try {
+      const store = new EvolutionStore({ fallbackRoot: root })
+      await store.init()
+      for (let i = 0; i < 5; i++) {
+        await store.addExperience({
+          taskId: 'switch-' + i,
+          prompt: 'repeat failed task',
+          summary: 'Repeated error during task',
+          success: false,
+          errors: ['repeat error: test failure'],
+          stepCount: 2,
+        })
+      }
+
+      const deps = makeDeps(store, root, true)
+      const tool = evolutionTools(deps).find(t => t.name === 'evo_full_cycle')!
+      const result = await tool.execute({
+        apiUrl: 'https://example.invalid',
+        apiKey: 'test-key',
+        model: 'test-model',
+        testCommand: 'node candidate.js',
+      } as never, { signal: AbortSignal.timeout(10_000) }) as {
+        ok: boolean
+        verdict?: string
+        candidateId?: string
+        reason?: string
+      }
+
+      expect(result.ok).toBe(false)
+      expect(result.verdict).toBe('REJECTED')
+      expect(result.reason).toContain('promotion is disabled by config')
+      expect(result.candidateId).toBeTruthy()
+      expect((await store.getCandidate(result.candidateId!))?.status).toBe('rejected')
+      expect(await store.listVersions(200)).toHaveLength(0)
+      expect(await store.getActiveVersion()).toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('does not block an explicit manual evo_promote call', async () => {
     const root = await mkdtemp(join(tmpdir(), 'evo-manual-switch-'))
     try {
