@@ -58,6 +58,22 @@ export async function evaluateRedTeamPromotionGate(
     add('candidate-binding', 'PASS', 'Benchmark is bound to the requested candidate ID.')
   }
 
+  if (latest.version !== candidate.parentVersion) {
+    add(
+      'candidate-parent-binding',
+      'FAIL',
+      'Benchmark version does not match the candidate\'s immutable parentVersion.',
+    )
+  } else if (latest.parentVersion !== undefined && latest.parentVersion !== candidate.parentVersion) {
+    add(
+      'candidate-parent-binding',
+      'FAIL',
+      'Benchmark parentVersion does not match the candidate\'s immutable parentVersion.',
+    )
+  } else {
+    add('candidate-parent-binding', 'PASS', 'Benchmark is bound to the candidate\'s immutable parentVersion.')
+  }
+
   if (latest.passed === true) {
     add('benchmark-outcome', 'PASS', 'Benchmark recorded passed=true.')
   } else if (latest.passed === false) {
