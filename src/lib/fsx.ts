@@ -106,15 +106,29 @@ export async function writeJsonFile(path: string, data: unknown): Promise<void> 
   await writeFile(path, JSON.stringify(data, null, 2) + '\n', 'utf8')
 }
 
-/** Read a newline-delimited JSON file; returns parsed objects or empty array on failure. */
+/**
+ * Read a newline-delimited JSON file.
+ *
+ * A single corrupt line must not discard the whole batch: line-by-line parsing
+ * keeps every intact record. A file-level failure (missing/unreadable) still
+ * yields an empty array, matching the previous contract.
+ */
 export async function readJsonlSafe(path: string): Promise<unknown[]> {
+  let text: string
   try {
-    const text = await readFile(path, 'utf8')
-    if (!text.trim()) return []
-    return text.split('\n').filter(Boolean).map(line => JSON.parse(line))
+    text = await readFile(path, 'utf8')
   } catch {
     return []
   }
+  if (!text.trim()) return []
+  const out: unknown[] = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      out.push(JSON.parse(line))
+    } catch { /* skip a corrupt line, keep every intact record */ }
+  }
+  return out
 }
 
 /** Atomic newline-delimited JSON write: write to tmp then rename. */

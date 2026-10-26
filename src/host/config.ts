@@ -28,6 +28,12 @@ export interface EvoConfig {
     }
     /** Hard cap on autonomous cycles per host process (loop safety). */
     maxCyclesPerProcess: number
+    /**
+     * Minimum gap between productive cycles, in milliseconds. Guards against
+     * rapid-fire analysis during bulk imports. Set to 0 to disable, which
+     * multi-cycle probes do explicitly.
+     */
+    cycleDebounceMs: number
   }
   experience: { maxRecords: number; retentionDays: number }
   candidate: { maxActive: number }
@@ -50,6 +56,7 @@ export const DEFAULT_CONFIG: EvoConfig = {
     generation: { enabled: false },
     promotion: { enabled: false },
     maxCyclesPerProcess: 3,
+    cycleDebounceMs: 2000,
   },
   experience: { maxRecords: 10000, retentionDays: 90 },
   candidate: { maxActive: 10 },
@@ -76,6 +83,7 @@ export const Config = z.object({
       enabled: z.boolean().default(DEFAULT_CONFIG.evolution.promotion.enabled),
     }).default(DEFAULT_CONFIG.evolution.promotion),
     maxCyclesPerProcess: z.number().default(DEFAULT_CONFIG.evolution.maxCyclesPerProcess),
+    cycleDebounceMs: z.number().default(DEFAULT_CONFIG.evolution.cycleDebounceMs),
   }).default(DEFAULT_CONFIG.evolution),
   experience: z.object({
     maxRecords: z.number().default(DEFAULT_CONFIG.experience.maxRecords),

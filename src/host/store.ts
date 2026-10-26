@@ -259,6 +259,30 @@ export class EvolutionStore {
   }
 
   /**
+   * Return the total number of experience records, bypassing the per-limit
+   * cache. Used by the fresh-experience gate so it measures true growth rather
+   * than movement within the read window.
+   */
+  async countExperiences(): Promise<number> {
+    const baseKey = 'listExperiences:__all__'
+    let all = this.getCache<ExperienceRecord[]>(baseKey)
+    if (all === null) {
+      // Force a full re-read to get the authoritative count.
+      const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
+      try {
+        await (await import('node:fs/promises')).access(jsonlPath)
+        all = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
+      } catch {
+        await this.ensureJsonlExists()
+        all = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
+      }
+      all.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      this.setCache(baseKey, all)
+    }
+    return all.length
+  }
+
+  /**
    * Prune experience records based on TTL and count cap.
    * Removes records older than `retentionDays` and, if count exceeds `maxRecords`,
    * removes the oldest records until the cap is met.
@@ -577,7 +601,11 @@ export class EvolutionStore {
       // through to recovery scan.
     }
     // Pointer missing or stale — recover from version records.
-    const versions = await this.listVersions()
+    // Use a fresh read (no cache) because this is a safety-critical decision:
+    // an external mutation may have changed the status of versions on disk,
+    // and the cache could serve stale data (up to CACHE_TTL_MS). Selecting a
+    // version from a stale cache would silently break the ambiguity invariant.
+    const versions = await this.listVersionsUncached()
     const activeVersions = versions.filter(v => v.status === 'active')
     if (activeVersions.length === 1) {
       // Unambiguous: repair the pointer atomically so subsequent reads use
@@ -656,10 +684,13 @@ export class EvolutionStore {
     return version
   }
 
-  async listVersions(limit: number = 50): Promise<Version[]> {
-    const key = `listVersions:${limit}`
-    const cached = this.getCache<Version[]>(key)
-    if (cached !== null) return cached
+  /**
+   * Read version records fresh from disk, bypassing the list cache.
+   *
+   * Used by the canonical-version resolution path (`getActiveVersion`) because
+   * that path must see current disk state when the pointer is missing/corrupt.
+   */
+  private async listVersionsUncached(limit: number = 50): Promise<Version[]> {
     const files = await listDir(this.versionDir(), limit)
     const versions: Version[] = []
     for (const f of files) {
@@ -667,7 +698,14 @@ export class EvolutionStore {
       const data = await readJsonSafe(join(this.versionDir(), f))
       if (data && typeof data === 'object') versions.push(data as Version)
     }
-    const sorted = versions.sort((a, b) => a.number - b.number)
+    return versions.sort((a, b) => a.number - b.number)
+  }
+
+  async listVersions(limit: number = 50): Promise<Version[]> {
+    const key = `listVersions:${limit}`
+    const cached = this.getCache<Version[]>(key)
+    if (cached !== null) return cached
+    const sorted = await this.listVersionsUncached(limit)
     this.setCache(key, sorted)
     return sorted
   }

@@ -45,9 +45,18 @@ describe('Audit 6: Partial write corruption', () => {
     await store.createVersion({ label: 'v1', modules: [] })
     const validIds: string[] = []
     for (let i = 0; i < 10; i++) validIds.push((await store.addExperience({ success: i < 5, stepCount: 5, versionId: 'v1', prompt: 'multi-corrupt-' + i })).id)
-    const allExp = await store.listExperiences(100)
-    for (let i = 0; i < 3 && i < allExp.length; i++) await writeFile(join(tmpRoot, 'experiences', allExp[i]!.id + '.json'), 'CORRUPTED' + i, 'utf8')
+    // Corrupt 3 lines in the authoritative .jsonl batch file (not the individual
+    // .json backups), then invalidate the cache so the next listExperiences call
+    // re-reads and skips the corrupt lines via line-by-line parsing.
+    const jsonlPath = join(tmpRoot, 'experiences', 'experiences.jsonl')
+    const { readFile, writeFile: writeFileDirect } = await import('node:fs/promises')
+    const lines = (await readFile(jsonlPath, 'utf8')).split('\n').filter(Boolean)
+    for (let i = 0; i < 3 && i < lines.length; i++) lines[i] = 'CORRUPTED' + i
+    await writeFileDirect(jsonlPath, lines.join('\n') + '\n', 'utf8')
+    // Invalidate cache so listExperiences re-reads the corrupt batch.
+    await (store as unknown as { invalidateCache: () => void }).invalidateCache()
     const remaining = await store.listExperiences(100)
+    // 3 corrupt lines are skipped by the per-line parser; 7 intact records survive.
     expect(remaining.length).toBe(7)
   })
 })

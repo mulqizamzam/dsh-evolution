@@ -132,6 +132,7 @@ describe('sequential-improvements.spec.ts — Mission C.1 capability probe', () 
         analysis: { minExperiences: MIN_EXP, minOccurrences: MIN_OCC },
         generation: { enabled: true },
         promotion: { enabled: true },
+        cycleDebounceMs: 0,
       },
     })
 
@@ -228,6 +229,7 @@ describe('sequential-improvements.spec.ts — Mission C.1 capability probe', () 
         analysis: { minExperiences: MIN_EXP, minOccurrences: MIN_OCC },
         generation: { enabled: true },
         promotion: { enabled: true },
+        cycleDebounceMs: 0,
       },
     })
 
@@ -263,7 +265,7 @@ describe('sequential-improvements.spec.ts — Mission C.1 capability probe', () 
         break
       }
 
-      const sig = String.fromCharCode(64 + cycle) // B, C, D, ..., K, L
+      const sig = String.fromCharCode(65 + cycle) // B, C, D, ..., K, L
       for (let i = 0; i < MIN_EXP; i++) {
         await store.addExperience({ success: false, errors: ['probe2-sig-' + sig], stepCount: 3, prompt: 'probe2-task-' + sig })
       }

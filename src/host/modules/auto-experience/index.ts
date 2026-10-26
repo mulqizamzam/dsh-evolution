@@ -346,12 +346,14 @@ export async function runAutoCycle(deps: ModuleDeps): Promise<AutoCycleOutcome> 
   if (guards.cyclesRun >= cfg.maxCyclesPerProcess) {
     return { ran: false, reason: 'per-process cycle cap reached' }
   }
-  // Debounce: skip if a productive cycle ran within the last 2 seconds.
+  // Debounce: skip if a productive cycle ran within the configured window.
   // This prevents rapid-fire analysis during bulk experience imports while still
   // allowing the first cycle to run immediately. Non-productive skips (not enough
-  // experiences) do NOT update lastCycleAt so the next turn can retry.
-  if (Date.now() - guards.lastCycleAt < 2000) {
-    return { ran: false, reason: 'debounce: last cycle ran less than 2s ago' }
+  // experiences) do NOT update lastCycleAt so the next turn can retry. The window
+  // is configurable so multi-cycle probes can disable it explicitly.
+  const debounceMs = cfg.cycleDebounceMs
+  if (debounceMs > 0 && Date.now() - guards.lastCycleAt < debounceMs) {
+    return { ran: false, reason: 'debounce: last cycle ran less than ' + debounceMs + 'ms ago' }
   }
 
   guards.inFlight = true

@@ -330,15 +330,23 @@ describe('Experience pruning — combined cap + TTL', () => {
   it('applies TTL first, then cap on remaining records', async () => {
     const tmpRoot = await mkdtemp(join(tmpdir(), 'evo-prune-combo-'))
     try {
-      const store = new EvolutionStore({ fallbackRoot: tmpRoot })
+      // Use a controlled clock so each addExperience gets a distinct timestamp;
+      // without distinct timestamps, addExperience calls land in the same
+      // millisecond and the tie-break between test oracle and prune differs.
+      let tick = 0
+      const base = new Date('2026-01-01T00:00:00.000Z').getTime()
+      const store = new EvolutionStore({
+        fallbackRoot: tmpRoot,
+        now: () => { tick += 100; return new Date(base + tick) },
+      })
       await store.init()
-
-      const now = new Date()
 
       // Add 4 old records (> 1 day)
       for (let i = 0; i < 4; i++) {
         const rec = await store.addExperience({ success: true, prompt: 'old-' + i, summary: 'os' + i })
-        const oldTs = isoDateTime(new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000))
+        // Rewrite with an old timestamp in both .json and .jsonl so prune and
+        // listExperiences agree on which records are expired.
+        const oldTs = isoDateTime(new Date(base - 2 * 24 * 60 * 60 * 1000))
         const { writeJsonAtomic } = await import('../src/lib/fsx.ts')
         await writeJsonAtomic(join(store.getRoot(), 'experiences', `${rec.id}.json`), { ...rec, timestamp: oldTs })
       }
@@ -360,8 +368,8 @@ describe('Experience pruning — combined cap + TTL', () => {
       const remaining = await store.listExperiences(100)
       expect(remaining.length).toBe(2)
       // Remaining should be the 2 newest by timestamp
-      const sortedRemaining2 = [...remaining].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-      const sortedNew = [...before.filter(r => r.prompt.startsWith('new-'))].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+      const sortedRemaining2 = [...remaining].sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id))
+      const sortedNew = [...before.filter(r => r.prompt.startsWith('new-'))].sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id))
       const expectedIds2 = sortedNew.slice(-2).map(r => r.id)
       const remainingIds2 = sortedRemaining2.map(r => r.id)
       expect(remainingIds2).toEqual(expectedIds2)
