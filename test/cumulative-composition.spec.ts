@@ -30,6 +30,8 @@ import { resolveConfig } from '../src/host/config.ts'
 import { makeFakeHost } from './helpers/fake-host.ts'
 import type { FakeHost } from './helpers/fake-host.ts'
 import type { ModuleDeps, CandidateModule, Version } from '../src/host/types.ts'
+import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import {
   materializeArtifact, validateArtifact, readArtifactManifest,
   artifactFilesDir, readBaseArtifactFiles,
@@ -95,17 +97,22 @@ async function seedCandidate(
   })
   if (opts?.withBenchmark !== false) {
     const rate = opts?.successRate ?? 0.99
+    const createdAt = isoDateTime(new Date())
+    const version = candidate.parentVersion
+    const command = 'node candidate-under-test.js'
     await store.addBenchmark({
       mode: 'live',
       candidateId: candidate.id,
-      version: 'v1',
-      baseline: 'v1',
+      version,
+      baseline: version,
+      parentVersion: version,
+      command,
+      provenance: createLiveProvenance(candidate.id, version, command, createdAt),
       runs: 3,
       metrics: { successRate: rate, avgScore: rate, errorRate: 0, avgSteps: 3, avgDurationMs: 100 },
       passed: true,
       details: 'live evidence for composition test',
-      createdAt: new Date().toISOString(),
-    })
+    }, createdAt)
   }
   await store.updateCandidate(candidate.id, { status: opts?.status ?? 'benchmarked' })
   return candidate
