@@ -98,10 +98,10 @@ describe('evolution quality and red-team gates', () => {
     expect(report.findings.some(f => f.rule === 'dynamic-code-execution')).toBe(true)
   })
 
-  it('detects a missing live provenance seal', () => {
+  it('flags a missing live provenance seal for review without misclassifying legacy records as tampering', () => {
     const report = auditBenchmarkIntegrity('cand-1', [benchmark({ provenance: undefined })])
-    expect(report.status).toBe('FAIL')
-    expect(report.findings.some(f => f.rule === 'live-provenance-invalid')).toBe(true)
+    expect(report.status).toBe('REVIEW')
+    expect(report.findings.some(f => f.rule === 'legacy-live-unsealed')).toBe(true)
   })
 
   it('accepts a matching live provenance seal', () => {

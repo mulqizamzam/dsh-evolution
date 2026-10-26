@@ -39,7 +39,7 @@ export function auditBenchmarkIntegrity(candidateId: string, records: BenchmarkR
   const criticalCount = findings.filter(f => f.severity === 'critical').length
   const highCount = findings.filter(f => f.severity === 'high').length
   return {
-    status: criticalCount > 0 ? 'FAIL' : highCount > 0 ? 'REVIEW' : 'PASS',
+    status: criticalCount > 0 ? 'FAIL' : highCount > 0 || reviewCount > 0 ? 'REVIEW' : 'PASS',
     candidateId,
     benchmarkCount: records.length,
     liveCount: records.filter(r => r.mode === 'live').length,
