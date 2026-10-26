@@ -125,6 +125,25 @@ export interface BenchmarkRun {
   caseResults?: BenchmarkExecutionResult[]
 }
 
+export type RedTeamGateVerdict = 'PASS' | 'FAIL' | 'INCONCLUSIVE'
+
+export interface PromotionGateCheck {
+  id: string
+  verdict: RedTeamGateVerdict
+  detail: string
+}
+
+/** Durable audit record for a candidate promotion gate evaluation. */
+export interface PromotionGateRun {
+  id: string
+  candidateId: string
+  benchmarkRunId?: string
+  checkedAt: string
+  verdict: RedTeamGateVerdict
+  blocked: boolean
+  checks: PromotionGateCheck[]
+}
+
 export interface BenchmarkMetrics {
   successRate: number
   avgScore: number
