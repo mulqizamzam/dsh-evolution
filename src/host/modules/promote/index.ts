@@ -7,7 +7,7 @@ import { promoteTools } from './tools.ts'
 import { evaluateRedTeamPromotionGate, redTeamGateError, type RedTeamGateReport } from './red-team.ts'
 
 export const name = 'promote'
-export const TOOLS = ['evo_promote', 'evo_rollback', 'evo_promote_list', 'evo_promote_decision'] as const
+export const TOOLS = ['evo_promote', 'evo_rollback', 'evo_promote_list', 'evo_promote_decision', 'evo_red_team_gate_history'] as const
 export const readEndpoints = {}
 export const writeEndpoints = {}
 
