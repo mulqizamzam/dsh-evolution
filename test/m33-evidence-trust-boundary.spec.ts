@@ -484,7 +484,7 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       result = await evaluatePromotionPolicy(deps, await store.getCandidate(v2.id)!)
       expect(result.ok).toBe(false)
       if (!result.ok) {
-        expect(result.error).toContain('record content does not match')
+        expect(result.error).toMatch(/content does not match.*attestation/i)
       }
 
       // Now verify that a tampered seal IS caught: attacker changes mode to
