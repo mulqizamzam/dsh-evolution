@@ -114,7 +114,7 @@ async function addCandidateWithLiveEvidence(store: EvolutionStore) {
     command,
     provenance: createLiveProvenance(candidate.id, 'v0', command, createdAt) ?? undefined,
     mode: 'live',
-  })
+  }, createdAt)
   return candidate
 }
 
