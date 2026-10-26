@@ -439,7 +439,7 @@ describe('M3.3 — Evidence Trust Boundary', () => {
   })
 
   // 8 ────────────────────────────────────────────────────────────────────────
-  it('persisted mode tampering is detectable; metrics-only tampering on a sealed record is not (documented limitation)', async () => {
+  it('persisted mode and metrics-only tampering are rejected by the Red Team gate', async () => {
     const root = await mkdtemp(join(tmpdir(), 'm33-tamper-'))
     try {
       const store = new EvolutionStore({ fallbackRoot: root })
@@ -477,24 +477,15 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       let result = await evaluatePromotionPolicy(deps, await store.getCandidate(v2.id)!)
       expect(result.ok).toBe(true)
 
-      // Attacker tampers: change metrics.successRate to 1.0 (a "perfect" run)
-      // but the provenance seal is still the original one.  The seal was
-      // computed over (candidateId, version, command, createdAt) — none of
-      // those fields changed — so the seal still matches.  The tampering
-      // only affected the metrics blob, which is NOT part of the seal.
-      // This demonstrates the limitation: the seal verifies execution context
-      // integrity, not metrics integrity.
+      // The legacy provenance seal does not bind metrics. The full-record
+      // attestation does, so a metrics-only edit must now fail closed.
       await tamperBenchmarkFile(root, goodRecord.id, { metrics: { successRate: 1.0, avgScore: 1.0, errorRate: 0, avgSteps: 0, avgDurationMs: 50 } })
 
       result = await evaluatePromotionPolicy(deps, await store.getCandidate(v2.id)!)
-      // The seal still matches (createdAt unchanged), so the policy gate
-      // passes.  This is the expected behavior: the seal is a liveness
-      // marker, not a metrics integrity guarantee.
-      //
-      // A stronger seal would include the metrics hash, but that would
-      // invalidate legitimate re-reads of unchanged metrics.  The current
-      // design is the minimal mechanism justified by the mission scope.
-      expect(result.ok).toBe(true)
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toContain('record content does not match')
+      }
 
       // Now verify that a tampered seal IS caught: attacker changes mode to
       // 'simulated' → policy rejects (candidate now has simulated evidence)
