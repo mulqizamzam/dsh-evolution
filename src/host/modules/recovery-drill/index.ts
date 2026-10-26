@@ -1,4 +1,7 @@
 import { JSON_OBJECT_OUTPUT, defineTool, registerToolSafe, text } from '../../dsh.ts'
+import { cp, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ModuleDeps, ToolDefinition } from '../../types.ts'
 import { getSandbox } from '../sandbox/index.ts'
 import { artifactFilesDir, readArtifactManifest, validateArtifact } from '../activation/artifact.ts'
@@ -92,11 +95,38 @@ export function apply(deps: ModuleDeps): void {
           mutationPerformed: false,
         })
       }
-      const result = await sandbox.exec(manifest.testCommand, {
-        cwd: artifactFilesDir(root, target.id),
-        timeoutMs: 30_000,
-        allowNetwork: false,
-      })
+      let result: Awaited<ReturnType<typeof sandbox.exec>> | null = null
+      let runError: string | null = null
+      let scratchRoot = ''
+      try {
+        // Never execute the test command against the persisted version artifact:
+        // tests can write files even when the intent is only verification.
+        scratchRoot = await mkdtemp(join(tmpdir(), 'dsh-evo-recovery-'))
+        const scratchDir = join(scratchRoot, 'candidate')
+        await cp(artifactFilesDir(root, target.id), scratchDir, { recursive: true, dereference: false, errorOnExist: true, force: false })
+        result = await sandbox.exec(manifest.testCommand, {
+          cwd: scratchDir,
+          timeoutMs: 30_000,
+          allowNetwork: false,
+        })
+      } catch (error) {
+        runError = error instanceof Error ? error.message : String(error)
+      } finally {
+        if (scratchRoot) await rm(scratchRoot, { recursive: true, force: true }).catch(() => {})
+      }
+      if (!result) {
+        return neutralizeDeep({
+          ok: true,
+          drill: 'FAIL',
+          activeVersionId: active?.id ?? null,
+          targetVersionId: target.id,
+          artifactValid: true,
+          sandboxAvailable: true,
+          testPassed: false,
+          reason: 'Could not run the recovery test in a disposable copy: ' + String(runError ?? 'unknown error'),
+          mutationPerformed: false,
+        })
+      }
       const testPassed = result.exitCode === 0 && !result.timedOut && !result.oomKilled
       return neutralizeDeep({
         ok: true,
@@ -114,7 +144,7 @@ export function apply(deps: ModuleDeps): void {
         stdout: result.stdout.slice(0, 3000),
         stderr: result.stderr.slice(0, 3000),
         mutationPerformed: false,
-        note: 'This drill validates a recovery target but does not activate it or prove that the host-level rollback operation itself will succeed.',
+        note: 'The test ran in a disposable copy; persisted artifacts and active version were not changed. This does not prove that the host-level rollback operation itself will succeed.',
       })
     },
   } as never)
