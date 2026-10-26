@@ -23,7 +23,10 @@ export interface EvoConfig {
       enabled: boolean
     }
     promotion: {
-      /** Allow the deterministic gate to promote without a human. */
+      /**
+       * Gate automatic promotion in evo_full_cycle/the autonomous loop.
+       * Explicit evo_promote and evo_rollback calls remain available.
+       */
       enabled: boolean
     }
     /** Hard cap on autonomous cycles per host process (loop safety). */

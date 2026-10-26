@@ -178,16 +178,55 @@ fallback is the *normal* outcome for at least:
 - `mkdtemp`/write failures, or the STEP 6 `AbortSignal.timeout(120_000)`
   expiring.
 
-**Known defect, deliberately not fixed here.** `promoteTools()`
-(`src/host/modules/promote/tools.ts:9-10`) binds only `const store = deps.store`
-and never reads `cfg`, so `evo_promote` and `evo_rollback` do not consult
-`evolution.promotion.enabled`; only `evo_full_cycle`
-(`evolution/tools.ts:286`) and the autonomous loop do. `evo_rollback` has no
-such gate at all. This is a real gap in the operator stop, separate from C-1,
-and is recorded here rather than fixed under this mission's scope.
+**Historical status note, clarified by contract C-2 below.** Earlier audit
+notes classified the absence of an `evolution.promotion.enabled` check in
+`evo_promote` and `evo_rollback` as a gap in the operator stop. The operator
+has now explicitly chosen a narrower meaning for that setting: it gates
+automatic promotion in `evo_full_cycle` and the autonomous loop, not explicit
+`evo_promote` tool calls or the recovery path `evo_rollback`. This is an
+intentional policy distinction, not a global emergency-stop guarantee.
 
 **Also undecided, unchanged by the above.** The `'manifest'` and absent-`mode`
 gap is real at the policy layer: `evaluatePromotionPolicy` tests only the
 literal string `'simulated'`. It is unreachable from both production callers
 today (`evo_promote` blocks it at `tools.ts:41`; `evo_full_cycle` can only
 write `'live'` or `'simulated'`), but it rests solely on a tool-layer check.
+
+
+---
+
+## C-2 — Scope of the autonomous promotion switch
+
+**Ratified:** explicit operator instruction on 2026-10-27 to define
+`evolution.promotion.enabled` as an automatic-promotion control while keeping
+the explicit promotion and rollback tool paths available. Recorded in the
+commit that adds this contract.
+
+### The rule
+
+- When `evolution.promotion.enabled === false`, automatic promotion performed
+  inside `evo_full_cycle` and the autonomous loop must remain blocked.
+- The setting does **not** block an explicit invocation of `evo_promote`.
+  That path remains subject to candidate-state checks, live-evidence
+  requirements, `evaluatePromotionPolicy`, artifact validation, and activation
+  pre-flight.
+- The setting does **not** block `evo_rollback`. Rollback is an explicit
+  recovery operation and remains available when automatic promotion is off.
+- The setting is **not** a global emergency stop and does not unregister the
+  `evo_*` tools.
+
+### Security boundary
+
+An explicit `evo_promote` tool call is an available manual control path; it is
+not proof of authenticated human identity. The current tool registry does not
+authenticate or distinguish a human operator from another caller. Deployments
+that need a hard stop against all callers must disable or remove tool access at
+the host/plugin boundary rather than rely on this setting.
+
+### Verification intent
+
+Tests must establish that automatic promotion remains blocked when the setting
+is false, that a valid explicit `evo_promote` call can still pass the normal
+promotion gates, and that `evo_rollback` remains available. This contract does
+not weaken evidence, comparative-promotion, artifact-validation, or sandbox
+requirements.

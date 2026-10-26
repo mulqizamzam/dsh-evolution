@@ -144,7 +144,7 @@ The defaults below reflect the plugin's declared configuration. Generation and p
 | `evolution.analysis.minExperiences` | `20` | Completed experiences required before analysis can run. |
 | `evolution.analysis.minOccurrences` | `5` | Occurrences required for a signature to count as recurring. |
 | `evolution.generation.enabled` | `false` | Permit LLM-backed candidate generation. |
-| `evolution.promotion.enabled` | `false` | Permit the autonomous promotion path. |
+| `evolution.promotion.enabled` | `false` | Gate automatic promotion in the full-cycle/autonomous path. Explicit `evo_promote` and recovery via `evo_rollback` remain available; this is not a global emergency stop or caller-authentication control. |
 | `evolution.maxCyclesPerProcess` | `3` | Per-process cap for autonomous cycles. |
 | `experience.maxRecords` | `10000` | Declared experience-retention limit. **Not currently enforced.** |
 | `experience.retentionDays` | `90` | Declared retention period. **Not currently enforced.** |
