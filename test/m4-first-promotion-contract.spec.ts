@@ -179,19 +179,20 @@ describe('M4 — first promotion: supported evidence modes (policy level)', () =
     })
   })
 
-  it('M4-1c: no active version + NO benchmark at all → policy allows promotion (characterized residual)', async () => {
-    // C-1 does NOT decide this case: it speaks only to records whose mode is
-    // the literal string 'simulated'. evaluatePromotionPolicy has no
-    // evidence-existence check of its own (both gate guards require
-    // candidateLatest to be truthy); the evo_promote tool layer does have one.
-    // Pinned here as a recorded residual, not endorsed as intended policy.
+  it('M4-1c: no active version + NO benchmark at all → Red Team gate is INCONCLUSIVE (C-3)', async () => {
+    // C-3 supersedes the earlier residual: missing evidence must never be
+    // interpreted as promotion eligibility. The shared policy blocks it.
     await withStore(async (store, root) => {
       const v1Id = await addCandidate(store, 'v1', 'v0')
       expect(await store.listBenchmarks(500)).toHaveLength(0)
 
       const result = await evaluatePromotionPolicy(makeDeps(store, root), await store.getCandidate(v1Id)!)
 
-      expect(result.ok).toBe(true)
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.redTeamGate.verdict).toBe('INCONCLUSIVE')
+        expect(result.error).toMatch(/red-team promotion gate INCONCLUSIVE/)
+      }
     })
   })
 
