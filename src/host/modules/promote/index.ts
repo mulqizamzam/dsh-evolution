@@ -53,14 +53,14 @@ export async function evaluatePromotionPolicy(
   // comparative check and the provenance-seal check once the state root grew.
   if (activeBeforePromote?.modules?.length) {
     const activeModuleId = activeBeforePromote.modules[0]
-    activeModuleBenchRecord = (await store.listBenchmarksByCandidate(activeModuleId))[0]
+    activeModuleBenchRecord = (await store.listBenchmarksByCandidate(activeModuleId, true))[0]
     if (activeModuleBenchRecord) {
       capturedActiveMetrics = activeModuleBenchRecord.metrics
     }
   }
 
   // Find the candidate's latest live benchmark metrics.
-  const candidateLatest = (await store.listBenchmarksByCandidate(candidate.id))[0]
+  const candidateLatest = (await store.listBenchmarksByCandidate(candidate.id, true))[0]
 
   // Reject: candidate's most recent evidence is simulated.
   //

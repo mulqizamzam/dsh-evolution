@@ -136,9 +136,12 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
           })
         }
 
-        // STEP 1: OBSERVE
+        // STEP 1: OBSERVE — read experiences and patterns in parallel (independent reads)
         steps.push('observe')
-        const experiences = await store.listExperiences(500)
+        const [experiences, existingPatterns] = await Promise.all([
+          store.listExperiences(500),
+          store.listPatterns(500),
+        ])
         if (experiences.length === 0) {
           return neutralizeDeep({ ok: false, steps, error: 'no experiences recorded; record some first with evo_experience_record' })
         }
@@ -147,11 +150,12 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
         steps.push('analyze')
         const min = typeof a.minOccurrences === 'number' ? Math.max(1, Math.floor(a.minOccurrences)) : 3
         const detected = detectPatterns(experiences, min)
-        const existing = await store.listPatterns(500)
-        const existingDescriptions = new Set(existing.map(p => p.description))
+        const existingDescriptions = new Set(existingPatterns.map(p => p.description))
         const fresh = detected.filter(p => !existingDescriptions.has(p.description))
-        const persisted = []
-        for (const p of fresh) persisted.push(await store.addPattern(p))
+        // Batch persist all fresh patterns in parallel instead of one-by-one.
+        const persisted = fresh.length > 0
+          ? await Promise.all(fresh.map(p => store.addPattern(p)))
+          : []
 
         if (persisted.length === 0) {
           return neutralizeDeep({ ok: false, steps, error: 'no new patterns detected; need more experiences with recurring signatures' })
@@ -321,11 +325,13 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
         // behaviour, not a defect — see docs/CONTRACTS.md.
         await store.updateCandidate(generatedCandidateId, { status: 'benchmarked' })
 
-        // Compute the probe version id that runPromotionPolicy will use
-        const versionNumber = (await store.listVersions(200)).reduce((max, v) => Math.max(max, v.number), 0) + 1
+        // Fetch version list and candidate in parallel (independent reads).
+        const [versions, candidate] = await Promise.all([
+          store.listVersions(200),
+          store.getCandidate(generatedCandidateId),
+        ])
+        const versionNumber = versions.reduce((max, v) => Math.max(max, v.number), 0) + 1
         const plannedVersionId = 'v' + String(versionNumber)
-
-        const candidate = await store.getCandidate(generatedCandidateId)
         if (!candidate) {
           await store.updateCandidate(generatedCandidateId, { status: 'rejected' })
           return neutralizeDeep({

@@ -76,6 +76,10 @@ export class EvolutionStore {
   private nowFn: () => Date
   /** LRU-style cache: key → { timestamp, value }. Cleared on every mutation. */
   private readonly cache = new Map<string, CacheEntry<unknown>>()
+  /** In-memory index: candidateId → [BenchmarkRun, ...]. Populated on first read, invalidated on mutation. */
+  private readonly _benchmarkByCandidate = new Map<string, BenchmarkRun[]>()
+  /** In-memory index: versionId → [ExperienceRecord, ...]. Populated on first read, invalidated on mutation. */
+  private readonly _experienceByVersion = new Map<string, ExperienceRecord[]>()
 
   constructor(options: StoreOptions) {
     this.root = resolveStateRoot(options.get, options.fallbackRoot, options.profileName)
@@ -136,6 +140,8 @@ export class EvolutionStore {
   /** Invalidate every cached list entry. Called after any mutation. */
   private invalidateCache(): void {
     this.cache.clear()
+    this._benchmarkByCandidate.clear()
+    this._experienceByVersion.clear()
   }
 
   // ── Experience ──
@@ -231,19 +237,19 @@ export class EvolutionStore {
     // record's `id` FIELD: the record content is persisted state that may have
     // been tampered with, and a crafted id like `../../x` must not be able to
     // direct a delete outside the experiences directory.
-    const records: Array<{ id: string; timestamp: string; file: string }> = []
+    const records: Array<{ id: string; timestamp: string; file: string; record: ExperienceRecord }> = []
     for (const f of allFiles) {
       if (!f.endsWith('.json')) continue
       const data = await readJsonSafe(join(this.experienceDir(), f))
       if (data && typeof data === 'object' && 'timestamp' in (data as Record<string, unknown>)) {
-        const rec = data as { id: string; timestamp: string }
+        const rec = data as ExperienceRecord
         if (typeof rec.id === 'string' && typeof rec.timestamp === 'string') {
-          records.push({ id: rec.id, timestamp: rec.timestamp, file: f })
+          records.push({ id: rec.id, timestamp: rec.timestamp, file: f, record: rec })
         }
       }
     }
 
-    const now = Date.now()
+    const now = this.nowFn().getTime()
     const ttlMs = retentionDays * 24 * 60 * 60 * 1000
     const cutoff = now - ttlMs
 
@@ -277,7 +283,7 @@ export class EvolutionStore {
       // Rewrite .jsonl with only kept records for consistency.
       const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
       if (kept.length > 0) {
-        await writeJsonlAtomic(jsonlPath, kept.map(r => ({ id: r.id, timestamp: r.timestamp })))
+        await writeJsonlAtomic(jsonlPath, kept.map(r => r.record))
       } else {
         await removeFile(jsonlPath)
       }
@@ -296,14 +302,18 @@ export class EvolutionStore {
    * active.  Used by post-promotion monitoring to attribute outcomes to the
    * version that was mounted at the time.
    *
-   * Leverages the in-memory list cache (Card A): the first call reads the
-   * full experience set once; subsequent calls hit the cache and only pay
-   * the O(N) client-side filter. Without the cache this would have doubled
-   * disk I/O.
+   * Uses the in-memory experience-by-version index (populated on first call,
+   * invalidated on mutation) so repeated calls avoid re-filtering the full
+   * experience set from disk.
    */
   async listExperiencesByVersion(versionId: string, limit: number = 50): Promise<ExperienceRecord[]> {
-    const all = await this.listExperiences(limit * 10)
-    return all.filter((e): e is ExperienceRecord & { versionId: string } => e.versionId === versionId).slice(0, limit)
+    let index = this._experienceByVersion.get(versionId)
+    if (index === undefined) {
+      const all = await this.listExperiences(limit * 10)
+      index = all.filter((e): e is ExperienceRecord & { versionId: string } => e.versionId === versionId)
+      this._experienceByVersion.set(versionId, index)
+    }
+    return index.slice(0, limit)
   }
 
   // ── Patterns ──
@@ -421,13 +431,18 @@ export class EvolutionStore {
   /**
    * Every benchmark record for one candidate, newest first.
    *
-   * `listBenchmarks` returns only the newest `limit` files by mtime, so once a
-   * state root holds more records than the window it silently stops reporting
-   * older ones. Promotion evidence must not depend on that window: a hidden
-   * baseline record makes the policy gate read as "no baseline exists" and
-   * skip the comparative and seal checks entirely.
+   * Uses an in-memory index (populated on first call, invalidated on mutation)
+   * so subsequent lookups are O(1) instead of scanning every file on disk.
+   *
+   * @param forceRefresh when true, bypasses the cache and reads from disk.
+   *   Use this in security-critical paths (promotion policy evaluation) where
+   *   the on-disk record may have been tampered with outside the store API.
    */
-  async listBenchmarksByCandidate(candidateId: string): Promise<BenchmarkRun[]> {
+  async listBenchmarksByCandidate(candidateId: string, forceRefresh = false): Promise<BenchmarkRun[]> {
+    if (!forceRefresh) {
+      const cached = this._benchmarkByCandidate.get(candidateId)
+      if (cached !== undefined) return cached
+    }
     const files = await listDir(this.benchmarkDir(), Number.MAX_SAFE_INTEGER)
     const runs: BenchmarkRun[] = []
     for (const f of files) {
@@ -437,7 +452,9 @@ export class EvolutionStore {
         runs.push(data as BenchmarkRun)
       }
     }
-    return runs.sort((x, y) => (x.createdAt > y.createdAt ? -1 : 1))
+    runs.sort((x, y) => (x.createdAt > y.createdAt ? -1 : 1))
+    if (!forceRefresh) this._benchmarkByCandidate.set(candidateId, runs)
+    return runs
   }
 
   // ── Versions ──

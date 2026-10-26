@@ -689,19 +689,24 @@ function buildSystemPrompt(): string {
 }
 
 function buildUserPrompt(patterns: Pattern[], experiences: ExperienceRecord[], parentVersion: string): string {
-  // Compression: cap patterns to top-5 by confidence, limit failures to 5 lines,
-  // clamp each line to 120 chars. Keeps total prompt under ~2000 chars for lower
-  // token cost and faster LLM responses without losing signal.
-  const clamped = (s: string) => (s.length > 120 ? s.slice(0, 117) + '...' : s)
-  const sortedPatterns = [...patterns].sort((a, b) => b.confidence - a.confidence).slice(0, 5)
+  // Aggressive compression: cap patterns to top-3 by confidence, limit failures
+  // to 3 lines, clamp each line to 100 chars. A global 1200-char hard cap keeps
+  // the prompt small enough that even the slowest backend parses within budget
+  // without truncating mid-string — the primary cause of parse failures.
+  const clamp = (s: string) => (s.length > 100 ? s.slice(0, 97) + '...' : s)
+  const sortedPatterns = [...patterns].sort((a, b) => b.confidence - a.confidence).slice(0, 3)
   const patternSummary = sortedPatterns.map(p =>
-    '- Pattern ' + p.id + ' (' + p.type + '): ' + clamped(p.description) + ' (occ: ' + p.occurrences + ')'
+    '- Pattern ' + p.id + ' (' + p.type + '): ' + clamp(p.description) + ' (occ: ' + p.occurrences + ')'
   ).join('\n')
-  const recentFailures = experiences.filter(e => !e.success).slice(0, 5).map(e =>
-    '- Task ' + clamped(e.taskId ?? 'unknown') + ': ' + clamped(e.summary ?? e.prompt ?? 'no summary') + ' | errors: ' + clamped((e.errors ?? []).join(', '))
+  const recentFailures = experiences.filter(e => !e.success).slice(0, 3).map(e =>
+    '- Task ' + clamp(e.taskId ?? 'unknown') + ': ' + clamp(e.summary ?? e.prompt ?? 'no summary') + ' | errors: ' + clamp((e.errors ?? []).join(', '))
   ).join('\n')
 
-  return 'Parent version: ' + parentVersion + '\n\nOBSERVED PATTERNS:\n' + patternSummary + '\n\nRECENT FAILURES:\n' + (recentFailures || '(none)') + '\n\nGenerate a candidate module that addresses the observed patterns.'
+  let prompt = 'Parent version: ' + parentVersion + '\n\nOBSERVED PATTERNS:\n' + patternSummary + '\n\nRECENT FAILURES:\n' + (recentFailures || '(none)') + '\n\nGenerate a candidate module that addresses the observed patterns.'
+  // Hard global cap: truncate from the end if the prompt exceeds the budget.
+  // Truncating mid-pattern would lose signal; truncating the footer is safe.
+  if (prompt.length > 1200) prompt = prompt.slice(0, 1197) + '...'
+  return prompt
 }
 
 // ── Tool definition ──
