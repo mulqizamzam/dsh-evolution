@@ -107,6 +107,9 @@ describe('Red Team Promotion Gate', () => {
       expect(gate.verdict).toBe('PASS')
       expect(gate.blocked).toBe(false)
       expect(gate.checks.every(check => check.verdict === 'PASS')).toBe(true)
+      expect(gate.auditRecordId).toBeTruthy()
+      const audit = await f.store.listPromotionGateRuns(f.candidate.id, 10)
+      expect(audit.some(record => record.id === gate.auditRecordId && record.verdict === 'PASS')).toBe(true)
       const policy = await evaluatePromotionPolicy(f.deps, f.candidate)
       expect(policy.ok).toBe(true)
     } finally {
@@ -120,6 +123,7 @@ describe('Red Team Promotion Gate', () => {
       const gate = await evaluateRedTeamPromotionGate(f.deps, f.candidate)
       expect(gate.verdict).toBe('INCONCLUSIVE')
       expect(gate.blocked).toBe(true)
+      expect(gate.auditRecordId).toBeTruthy()
 
       const tool = promoteTools(f.deps).find(item => item.name === 'evo_promote')!
       const result = await tool.execute({ candidateId: f.candidate.id } as never, {
