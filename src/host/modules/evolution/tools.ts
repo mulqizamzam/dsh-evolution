@@ -358,6 +358,7 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
             candidateId: generatedCandidateId,
             pattern: strongestPattern.id,
             reason: 'promotion failed: ' + promoResult.error,
+            redTeamGate: promoResult.redTeamGate,
           })
         }
 
@@ -368,6 +369,7 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
           candidateId: generatedCandidateId,
           versionId: promoResult.version.id,
           pattern: strongestPattern.id,
+          redTeamGate: promoResult.redTeamGate,
           benchResult: benchResult ?? null,
         })
       },
