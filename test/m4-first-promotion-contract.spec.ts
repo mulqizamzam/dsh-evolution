@@ -112,8 +112,10 @@ async function addCandidate(
 async function addSimBenchmark(
   store: EvolutionStore, candidateId: string, successRate: number,
 ): Promise<BenchmarkRun> {
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
   return store.addBenchmark({
-    candidateId, version: 'v-temp', baseline: 'unknown', runs: 5,
+    candidateId, version: candidate.parentVersion, baseline: candidate.parentVersion, parentVersion: candidate.parentVersion, runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 100 },
     passed: successRate >= 0.8, details: 'simulated', mode: 'simulated',
   })
@@ -123,11 +125,14 @@ async function addLiveBenchmark(
   store: EvolutionStore, candidateId: string, successRate: number, command = 'node test.js',
 ): Promise<BenchmarkRun> {
   const createdAt = isoDateTime(new Date())
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
+  const version = candidate.parentVersion
   return store.addBenchmark({
-    candidateId, version: 'v-temp', baseline: 'unknown', runs: 5,
+    candidateId, version, baseline: version, parentVersion: version, runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 200 },
     passed: successRate >= 0.8, details: 'live sandbox execution: exit 0',
-    mode: 'live', command, provenance: createLiveProvenance(candidateId, 'v-temp', command, createdAt),
+    mode: 'live', command, provenance: createLiveProvenance(candidateId, version, command, createdAt),
   }, createdAt)
 }
 
