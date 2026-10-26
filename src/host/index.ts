@@ -20,6 +20,7 @@ import * as builderModule from './modules/builder/index.ts'
 import * as autoExperienceModule from './modules/auto-experience/index.ts'
 import * as activationModule from './modules/activation/index.ts'
 import * as versionHistoryModule from './modules/version-history/index.ts'
+import * as evidenceScoreModule from './modules/evidence-score/index.ts'
 
 export const name = 'dsh-evolution'
 
@@ -53,6 +54,7 @@ export const MODULES: EvoModule[] = [
   // Activation mounts the active version's artifact, so it must run last.
   activationModule,
   versionHistoryModule,
+  evidenceScoreModule,
 ] as unknown as EvoModule[]
 
 /**
