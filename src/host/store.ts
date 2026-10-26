@@ -3,6 +3,7 @@ import { ensureDir, ensureStateRoot, resolveStateRoot } from '../lib/home.ts'
 import type { ContextGet } from '../lib/home.ts'
 import { readJsonSafe, writeJsonAtomic, writeJsonFile, listDir, removeFile, readJsonlSafe, writeJsonlAtomic } from '../lib/fsx.ts'
 import { newId, isoDateTime, versionId, isSafeKey } from '../lib/ids.ts'
+import { createBenchmarkAttestation } from '../lib/provenance.ts'
 import type {
   ExperienceRecord, Pattern, CandidateModule, BenchmarkRun, Version,
 } from './types.ts'
@@ -467,6 +468,9 @@ export class EvolutionStore {
       id: newId(),
       createdAt: createdAt ?? isoDateTime(this.nowFn()),
     }
+    // The store, not the benchmark caller, owns the record attestation.
+    // Overwrite any caller-provided value so callers cannot choose the digest.
+    full.attestation = createBenchmarkAttestation(full as unknown as Record<string, unknown>)
     await writeJsonAtomic(join(this.benchmarkDir(), `${full.id}.json`), full)
     this.invalidateCache()
     return full
