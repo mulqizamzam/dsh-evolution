@@ -24,6 +24,7 @@ import * as evidenceScoreModule from './modules/evidence-score/index.ts'
 import * as shadowEvaluationModule from './modules/shadow-evaluation/index.ts'
 import * as memoryLifecycleModule from './modules/memory-lifecycle/index.ts'
 import * as adversarialBenchmarkModule from './modules/adversarial-benchmark/index.ts'
+import * as integrityRedTeamModule from './modules/integrity-red-team/index.ts'
 
 export const name = 'dsh-evolution'
 
@@ -61,6 +62,7 @@ export const MODULES: EvoModule[] = [
   shadowEvaluationModule,
   memoryLifecycleModule,
   adversarialBenchmarkModule,
+  integrityRedTeamModule,
 ] as unknown as EvoModule[]
 
 /**
