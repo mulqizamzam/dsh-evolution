@@ -52,10 +52,13 @@ function makeDeps(store: EvolutionStore, root: string): ModuleDeps {
 
 /** Add a simulated benchmark for a candidate. */
 async function addSimBenchmark(store: EvolutionStore, candidateId: string, successRate: number): Promise<BenchmarkRun> {
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
   return store.addBenchmark({
     candidateId,
-    version: 'v-temp',
-    baseline: 'unknown',
+    version: candidate.parentVersion,
+    baseline: candidate.parentVersion,
+    parentVersion: candidate.parentVersion,
     runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 100 },
     passed: successRate >= 0.8,
@@ -77,11 +80,15 @@ async function addLiveBenchmark(
   command = 'node test.js',
 ): Promise<BenchmarkRun> {
   const createdAt = isoDateTime(new Date())
-  const provenance = createLiveProvenance(candidateId, 'v-temp', command, createdAt)
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
+  const version = candidate.parentVersion
+  const provenance = createLiveProvenance(candidateId, version, command, createdAt)
   return store.addBenchmark({
     candidateId,
-    version: 'v-temp',
-    baseline: 'unknown',
+    version,
+    baseline: version,
+    parentVersion: version,
     runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 200 },
     passed: successRate >= 0.8,
@@ -245,8 +252,8 @@ describe('M3.3 — Evidence Trust Boundary', () => {
 
       // Create a live benchmark for v2 with a deliberately WRONG provenance.
       const createdAt = isoDateTime(new Date())
-      const goodProvenance = createLiveProvenance(v2Id, 'v-temp', 'node test.js', createdAt)
-      const badProvenance = createLiveProvenance(v1Id, 'v-temp', 'node test.js', createdAt) // uses v1Id, not v2Id
+      const goodProvenance = createLiveProvenance(v2Id, 'v1', 'node test.js', createdAt)
+      const badProvenance = createLiveProvenance(v1Id, 'v0', 'node test.js', createdAt) // uses v1Id, not v2Id
 
       const record = await store.addBenchmark({
         candidateId: v2Id,
