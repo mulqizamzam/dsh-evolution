@@ -80,6 +80,8 @@ export class EvolutionStore {
   private readonly _benchmarkByCandidate = new Map<string, BenchmarkRun[]>()
   /** In-memory index: versionId → [ExperienceRecord, ...]. Populated on first read, invalidated on mutation. */
   private readonly _experienceByVersion = new Map<string, ExperienceRecord[]>()
+  /** In-flight .jsonl migration; shared so concurrent first reads migrate once. */
+  private jsonlMigration: Promise<void> | null = null
 
   constructor(options: StoreOptions) {
     this.root = resolveStateRoot(options.get, options.fallbackRoot, options.profileName)
@@ -161,33 +163,53 @@ export class EvolutionStore {
     return full
   }
 
-  /** Ensure the .jsonl file exists by migrating from individual .json files if needed. */
+  /**
+   * Ensure the .jsonl batch file exists, migrating from the individual .json
+   * files on first use.
+   *
+   * Single-flight: two concurrent first reads would otherwise each scan every
+   * experience file and each rewrite the batch file. The in-flight promise is
+   * shared, so the migration runs exactly once.
+   */
   private async ensureJsonlExists(): Promise<void> {
     const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
     try {
       await (await import('node:fs/promises')).access(jsonlPath)
       return // already exists
     } catch { /* doesn't exist — migrate */ }
-    const files = await listDir(this.experienceDir(), Number.MAX_SAFE_INTEGER)
-    const records: ExperienceRecord[] = []
-    for (const f of files) {
-      if (!f.endsWith('.json') || f === 'experiences.jsonl') continue
-      const data = await readJsonSafe(join(this.experienceDir(), f))
-      if (data && typeof data === 'object' && 'id' in (data as Record<string, unknown>)) {
-        records.push(data as ExperienceRecord)
+    if (this.jsonlMigration !== null) return this.jsonlMigration
+    const run = (async () => {
+      const files = await listDir(this.experienceDir(), Number.MAX_SAFE_INTEGER)
+      const records: ExperienceRecord[] = []
+      for (const f of files) {
+        if (!f.endsWith('.json') || f === 'experiences.jsonl') continue
+        const data = await readJsonSafe(join(this.experienceDir(), f))
+        if (data && typeof data === 'object' && 'id' in (data as Record<string, unknown>)) {
+          records.push(data as ExperienceRecord)
+        }
       }
-    }
-    if (records.length > 0) {
-      await writeJsonlAtomic(jsonlPath, records)
-    }
+      if (records.length > 0) {
+        await writeJsonlAtomic(jsonlPath, records)
+      }
+    })()
+    this.jsonlMigration = run.finally(() => { this.jsonlMigration = null })
+    return this.jsonlMigration
   }
 
   private async appendExperienceJsonl(record: ExperienceRecord): Promise<void> {
     const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
+    const line = JSON.stringify(record) + '\n'
     try {
-      await (await import('node:fs/promises')).appendFile(jsonlPath, JSON.stringify(record) + '\n', 'utf8')
-    } catch {
-      // File doesn't exist yet — create it with just this record.
+      // `appendFile` creates the file when it is absent (flag 'a'), so the
+      // common first-write case needs no special handling.
+      await (await import('node:fs/promises')).appendFile(jsonlPath, line, 'utf8')
+    } catch (err) {
+      // A missing parent directory is the only recoverable case. Any other
+      // failure (EACCES, ENOSPC, …) must surface: the previous fallback
+      // rewrote the batch file from this single record, which silently
+      // truncated every experience already stored in it.
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err
+      await ensureDir(this.experienceDir())
       await writeJsonlAtomic(jsonlPath, [record])
     }
   }
