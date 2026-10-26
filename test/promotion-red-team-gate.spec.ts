@@ -163,6 +163,33 @@ describe('Red Team Promotion Gate', () => {
     }
   })
 
+  it('rejects live evidence bound to a different candidate parent version', async () => {
+    const f = await fixture()
+    try {
+      const createdAt = isoDateTime(new Date())
+      const wrongVersion = 'v1'
+      const command = 'node candidate.js'
+      await f.store.addBenchmark({
+        candidateId: f.candidate.id,
+        version: wrongVersion,
+        baseline: wrongVersion,
+        parentVersion: wrongVersion,
+        runs: 3,
+        metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 10 },
+        passed: true,
+        details: 'mismatched parent version fixture',
+        mode: 'live',
+        command,
+        provenance: createLiveProvenance(f.candidate.id, wrongVersion, command, createdAt),
+      }, createdAt)
+      const gate = await evaluateRedTeamPromotionGate(f.deps, f.candidate)
+      expect(gate.verdict).toBe('FAIL')
+      expect(gate.checks.find(check => check.id === 'candidate-parent-binding')?.verdict).toBe('FAIL')
+    } finally {
+      await rm(f.root, { recursive: true, force: true })
+    }
+  })
+
   it('reports INCONCLUSIVE for manifest-only evidence', async () => {
     const f = await fixture()
     try {
