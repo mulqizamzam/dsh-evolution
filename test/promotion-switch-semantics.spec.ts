@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
 import { promoteTools } from '../src/host/modules/promote/tools.ts'
 import { evolutionTools } from '../src/host/modules/evolution/tools.ts'
@@ -88,6 +89,7 @@ async function addCandidateWithLiveEvidence(store: EvolutionStore) {
   })
 
   const createdAt = isoDateTime(new Date())
+  const command = 'node candidate.js'
   await store.addBenchmark({
     candidateId: candidate.id,
     version: 'v1',
@@ -103,6 +105,8 @@ async function addCandidateWithLiveEvidence(store: EvolutionStore) {
     passed: true,
     details: 'test live evidence',
     createdAt,
+    command,
+    provenance: createLiveProvenance(candidate.id, 'v1', command, createdAt) ?? undefined,
     mode: 'live',
   })
   return candidate
