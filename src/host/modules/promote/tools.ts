@@ -199,6 +199,30 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
     } as never),
 
     defineTool({
+      name: 'evo_red_team_gate_history',
+      description: 'List persisted Red Team promotion-gate evaluations with per-check verdicts and reasons. Use candidateId to filter history; otherwise returns the most recent evaluations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          candidateId: { type: 'string', description: 'Optional candidate ID to filter gate history.' },
+          limit: { type: 'number', description: 'Maximum number of records to return (1-100, defaults to 20).' },
+        },
+        required: [],
+      },
+      output: { schema: JSON_OBJECT_OUTPUT, render: RENDER },
+      execute: async (args: never) => {
+        const a = (args ?? {}) as Record<string, unknown>
+        const candidateId = typeof a.candidateId === 'string' && a.candidateId.length > 0
+          ? a.candidateId
+          : undefined
+        const rawLimit = typeof a.limit === 'number' ? Math.floor(a.limit) : 20
+        const limit = Math.max(1, Math.min(100, rawLimit))
+        const runs = await store.listPromotionGateRuns(candidateId, limit)
+        return neutralizeDeep({ ok: true, count: runs.length, runs })
+      },
+    } as never),
+
+    defineTool({
       name: 'evo_promote_decision',
       description: 'Read the latest benchmark evidence for a candidate and apply the promotion policy. Returns a recommendation of promote or reject with the exact metrics that justify the decision.',
       parameters: {
