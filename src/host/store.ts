@@ -259,30 +259,6 @@ export class EvolutionStore {
   }
 
   /**
-   * Return the total number of experience records, bypassing the per-limit
-   * cache. Used by the fresh-experience gate so it measures true growth rather
-   * than movement within the read window.
-   */
-  async countExperiences(): Promise<number> {
-    const baseKey = 'listExperiences:__all__'
-    let all = this.getCache<ExperienceRecord[]>(baseKey)
-    if (all === null) {
-      // Force a full re-read to get the authoritative count.
-      const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
-      try {
-        await (await import('node:fs/promises')).access(jsonlPath)
-        all = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
-      } catch {
-        await this.ensureJsonlExists()
-        all = (await readJsonlSafe(jsonlPath)) as ExperienceRecord[]
-      }
-      all.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-      this.setCache(baseKey, all)
-    }
-    return all.length
-  }
-
-  /**
    * Prune experience records based on TTL and count cap.
    * Removes records older than `retentionDays` and, if count exceeds `maxRecords`,
    * removes the oldest records until the cap is met.
