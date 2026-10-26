@@ -98,7 +98,7 @@ async function addCandidateWithLiveEvidence(store: EvolutionStore) {
   const command = 'node candidate.js'
   await store.addBenchmark({
     candidateId: candidate.id,
-    version: 'v1',
+    version: 'v0',
     baseline: 'unknown',
     runs: 3,
     metrics: {
@@ -112,7 +112,7 @@ async function addCandidateWithLiveEvidence(store: EvolutionStore) {
     details: 'test live evidence',
     createdAt,
     command,
-    provenance: createLiveProvenance(candidate.id, 'v1', command, createdAt) ?? undefined,
+    provenance: createLiveProvenance(candidate.id, 'v0', command, createdAt) ?? undefined,
     mode: 'live',
   })
   return candidate
