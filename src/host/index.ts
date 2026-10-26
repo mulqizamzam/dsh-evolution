@@ -21,6 +21,7 @@ import * as autoExperienceModule from './modules/auto-experience/index.ts'
 import * as activationModule from './modules/activation/index.ts'
 import * as versionHistoryModule from './modules/version-history/index.ts'
 import * as evidenceScoreModule from './modules/evidence-score/index.ts'
+import * as shadowEvaluationModule from './modules/shadow-evaluation/index.ts'
 
 export const name = 'dsh-evolution'
 
@@ -55,6 +56,7 @@ export const MODULES: EvoModule[] = [
   activationModule,
   versionHistoryModule,
   evidenceScoreModule,
+  shadowEvaluationModule,
 ] as unknown as EvoModule[]
 
 /**
