@@ -236,7 +236,7 @@ describe('M4 — first promotion: the manual tool applies a stricter gate', () =
       const result = await tool.execute({ candidateId: v1Id } as never, { signal: AbortSignal.timeout(10_000) }) as { ok: boolean; error?: string }
 
       expect(result.ok).toBe(false)
-      expect(result.error).toMatch(/no live benchmark|simulated evidence cannot promote/)
+      expect(result.error).toMatch(/red-team promotion gate FAIL|simulated evidence is not promotion-eligible|simulated evidence/i)
     })
   })
 
@@ -252,7 +252,7 @@ describe('M4 — first promotion: the manual tool applies a stricter gate', () =
       const result = await tool.execute({ candidateId: v1Id } as never, { signal: AbortSignal.timeout(20_000) }) as { ok: boolean; error?: string }
 
       // Whatever happens downstream, the evidence gate must not be what blocked it.
-      expect(result.error ?? '').not.toMatch(/no live benchmark|simulated evidence cannot promote/)
+      expect(result.error ?? '').not.toMatch(/red-team promotion gate FAIL|simulated evidence is not promotion-eligible|simulated evidence/i)
     })
   })
 })
@@ -480,7 +480,7 @@ describe('C-1 — first-promotion evidence contract', () => {
       expect(viaPolicy.ok).toBe(false)
       if (!viaPolicy.ok) expect(viaPolicy.error).toMatch(/simulated evidence/)
       expect(viaTool.ok).toBe(false)
-      expect(viaTool.error).toMatch(/no live benchmark|simulated evidence cannot promote/)
+      expect(viaTool.error).toMatch(/red-team promotion gate FAIL|simulated evidence is not promotion-eligible|simulated evidence/i)
 
       // Neither path may leave partial state behind.
       expect(await store.listVersions(200)).toHaveLength(0)
