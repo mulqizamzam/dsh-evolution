@@ -42,9 +42,12 @@ export async function evaluatePromotionPolicy(
   | { ok: false; error: string; redTeamGate: RedTeamGateReport }
 > {
   const store = deps.store
+  // Read the candidate evidence once and pass that exact snapshot to the gate,
+  // avoiding a second read between integrity validation and policy evaluation.
+  const candidateLatest = (await store.listBenchmarksByCandidate(candidate.id, true))[0]
   // This is the shared fail-closed gate for manual and automatic promotion.
   // INCONCLUSIVE is deliberately not promotable.
-  const redTeamGate = await evaluateRedTeamPromotionGate(deps, candidate)
+  const redTeamGate = await evaluateRedTeamPromotionGate(deps, candidate, candidateLatest ?? null)
   if (redTeamGate.verdict !== 'PASS') {
     return { ok: false, error: redTeamGateError(redTeamGate), redTeamGate }
   }
@@ -69,8 +72,7 @@ export async function evaluatePromotionPolicy(
     }
   }
 
-  // Find the candidate's latest live benchmark metrics.
-  const candidateLatest = (await store.listBenchmarksByCandidate(candidate.id, true))[0]
+  // candidateLatest is the exact record snapshot that passed the Red Team gate.
 
   // Reject: candidate's most recent evidence is simulated.
   //
@@ -90,30 +92,13 @@ export async function evaluatePromotionPolicy(
   }
 
   if (capturedActiveMetrics && candidateLatest && candidateLatest.mode !== 'simulated') {
-    // Live records must carry a valid provenance seal when an active
-    // baseline exists.  This closes the unsealed-record forgery bypass
-    // (attacker flips mode='simulated'→'live' without adding a seal).
-    //
-    // Pre-seal records (no provenance field) from before M3.3 are tolerated
-    // only when the active baseline's own record is also unsealed — in that
-    // case neither side can be verified by seal and the gate falls back to
-    // the beats_active comparison.  This preserves backward compatibility
-    // for state roots created before the provenance mechanism was introduced.
-    if (candidateLatest.mode === 'live') {
-      const candidateSealed = candidateLatest.provenance !== undefined
-      const activeSealed = capturedActiveMetrics !== undefined && (activeModuleBenchRecord?.provenance ?? undefined) !== undefined
-
-      if (candidateSealed || activeSealed) {
-        // At least one side is sealed → the seal check applies.
-        if (!verifyLiveProvenance(candidateLatest)) {
-          return {
-            ok: false,
-            error: candidateLatest.provenance
-              ? 'provenance consistency mismatch: stored seal does not match the record fields; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence'
-              : 'live benchmark provenance seal missing: no provenance on record; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence',
-            redTeamGate,
-          }
-        }
+    // The Red Team gate has already required valid candidate provenance.
+    // Keep this defensive check adjacent to the comparative decision as well.
+    if (candidateLatest.mode === 'live' && !verifyLiveProvenance(candidateLatest)) {
+      return {
+        ok: false,
+        error: 'provenance consistency mismatch: stored seal does not match the record fields; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence',
+        redTeamGate,
       }
     }
     const activeSuccessRate = capturedActiveMetrics.successRate
