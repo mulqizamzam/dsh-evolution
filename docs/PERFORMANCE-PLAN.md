@@ -3,6 +3,8 @@
 ## Change Classification
 **Cross-module feature + refactor.** Touches `store.ts`, `auto-experience/index.ts`, `builder/tools.ts`. No public API contract changes; no schema migration. Single-process runtime (no concurrency risk).
 
+**Status (2026-10-26): SHIPPED.** All five cards plus a follow-up correctness round (C1 → C2 → C0) are merged to `main` and pushed. Full suite: **701 passed / 0 failed / 2 skipped**. See [Final State](#final-state-2026-10-26).
+
 ## Evidence Base
 
 | Bottleneck | Evidence | Impact |
@@ -18,7 +20,7 @@
 - Parallelizing the auto-cycle (single-threaded JS event loop)
 
 **Must-not-regress:**
-- All 681 existing passing tests
+- All 701 existing passing tests (681 at planning time; 20 added since)
 - `evo_observe_state` return shape (field names)
 - `pruneExperiences()` semantics (TTL + cap order)
 - Atomic write contract (no partial writes)
@@ -274,7 +276,7 @@ Ensures store mutation and pruning semantics are preserved with the new `.jsonl`
 ```bash
 npx vitest run
 ```
-Target: 681 passed, 0 new failures. (The 9 pre-existing failures in `prune-deterministic`, `real-agnes-experiment`, `sequential-improvements` are known and unrelated.)
+Target met and exceeded: **701 passed / 0 failed / 2 skipped**. The baseline at `5e1431c` had 5 failures (696 passed); each was fixed at its root cause — see [Final State](#final-state-2026-10-26). The 2 skipped tests are `test/real-agnes-experiment.spec.ts`, which requires a live LLM endpoint.
 
 ---
 
@@ -309,11 +311,63 @@ Phase 2 (sequential, 1 card):
 
 ---
 
+## Final State (2026-10-26)
+
+### Shipped commits
+
+| Commit | Scope |
+|---|---|
+| `5e1431c` | Cards A/B/C — store cache, `listExperiencesByVersion` index, prompt compression, `pruneExperiences` `nowFn` fix |
+| `4dc01b7` / `a4de320` | Card E — `.jsonl` batch format for experiences |
+| `13bc2ff` | Card D — 2s auto-cycle debounce |
+| `45c647b` | Card C — prompt clamped to ≤2000 chars |
+| `6d90986` | **C1** — `pruneExperiences` reconciles `experiences.jsonl` so TTL deletions actually take effect |
+| `f85392e` | **C2** — parse+sort the batch file once per TTL, slice per limit (63.14 ms → 10.04 ms across 5 distinct limits on 551 real records) |
+| `0a3ad6c` | **C0** — single-flight `.jsonl` migration; append failure no longer truncates the batch file |
+| `5732461` | Fixed the 4 remaining pre-existing test failures (table below) |
+| `6a425ba` | Removed unused `countExperiences()` helper |
+
+### Why C1 → C2 → C0 came after Cards A–E
+
+Cards A–E shipped first, but a correctness bug made their read-path optimizations operate on data that could never be pruned:
+
+- `listExperiences()` reads `experiences.jsonl`, while `pruneExperiences()` only deleted individual `.json` files on the TTL phase. Pruned records stayed visible on every read, and the TTL test failed (expected 3, got 5).
+- `listExperiences()` re-parsed and re-sorted the whole batch file for every distinct limit (50/500/5000/10000), so read cost scaled with `dataset × distinct limits`.
+- `ensureJsonlExists()` could run twice concurrently, and `appendExperienceJsonl()` fell back to rewriting the batch file from a single record on any append error — silently truncating stored history.
+
+Ordering was deliberate: fix data correctness (C1), then read cost (C2), then write-path resilience (C0).
+
+### Test-suite state
+
+| Metric | Baseline (`5e1431c`) | Final (`6a425ba`) |
+|---|---|---|
+| Test files | 63 passed / 4 failed | **67 passed / 0 failed / 2 skipped** |
+| Tests | 696 passed / 5 failed | **701 passed / 0 failed / 2 skipped** |
+| `npm run typecheck` | — | clean (`tsc --noEmit`) |
+
+The 5 baseline failures were resolved at their actual root causes, not by loosening assertions:
+
+| Failure | Root cause | Fix |
+|---|---|---|
+| `prune-promotion-gate` — TTL case | prune never rewrote `.jsonl` | C1 reconcile step |
+| `prune-promotion-gate` — TTL+cap case | timestamp ties between the test oracle and prune | deterministic clock + `id` tie-break in the test oracle |
+| `audit-6` — partial write corruption | test corrupted `.json` files the read path no longer reads | test corrupts `.jsonl` lines; `readJsonlSafe` now parses per line and skips only the corrupt lines |
+| `canonical-active-state` P10 | recovery path used the cached `listVersions()` | `listVersionsUncached()` for the safety-critical recovery scan |
+| `sequential-improvements` (×2) | hard-coded 2s debounce made multi-cycle probes impossible; test-side `64 + cycle` produced `'A'`, duplicating the seed signature | configurable `cycleDebounceMs` (default 2000, probes set 0); test fixed to `65 + cycle` |
+
+### Known limitation (unchanged by this work)
+
+The fresh-experience gate still measures growth through a bounded read window (`listExperiences(minExperiences * 4)`), so once the total exceeds that window the observed delta undercounts new records. This is documented in `docs/RUNTIME-NOTES.md` and is why a `cap=10` probe stops after 4 productive cycles. Fixing it changes runtime behaviour and needs its own test, so it was deliberately left out of this plan.
+
+---
+
 ## Completion Criteria
 
-- [ ] All 5 cards implemented
-- [ ] 681+ tests passing (no new failures vs baseline)
-- [ ] `listExperiences()` cache hit measurable in timing (optional benchmark)
-- [ ] LLM prompt size ≤ 2000 chars (verified by test)
-- [ ] `.jsonl` migration tested with existing `.json` data
-- [ ] `git push origin main`
+- [x] All 5 cards implemented — `5e1431c`, `4dc01b7`, `a4de320`, `13bc2ff`, `45c647b`
+- [x] Correctness follow-up (C1 → C2 → C0) implemented — `6d90986`, `f85392e`, `0a3ad6c`
+- [x] 701 tests passing, 0 failing, 2 skipped (`npm test`, `exit=0`)
+- [x] `npm run typecheck` clean
+- [x] `listExperiences()` single-parse-per-TTL measured — 63.14 ms → 10.04 ms across 5 limits on 551 real records
+- [x] LLM prompt size ≤ 2000 chars (verified by test)
+- [x] `.jsonl` migration tested with existing `.json` data
+- [x] `git push origin main` — HEAD `6a425ba`, ahead/behind 0/0
