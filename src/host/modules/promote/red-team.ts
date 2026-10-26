@@ -1,21 +1,12 @@
-import type { BenchmarkRun, CandidateModule, ModuleDeps } from '../../types.ts'
+import type { BenchmarkRun, CandidateModule, ModuleDeps, PromotionGateRun, PromotionGateCheck, RedTeamGateVerdict } from '../../types.ts'
 import { verifyBenchmarkAttestation, verifyLiveProvenance } from '../../../lib/provenance.ts'
 
-export type RedTeamVerdict = 'PASS' | 'FAIL' | 'INCONCLUSIVE'
+export type RedTeamVerdict = RedTeamGateVerdict
+export type RedTeamCheck = PromotionGateCheck
 
-export interface RedTeamCheck {
-  id: string
-  verdict: RedTeamVerdict
-  detail: string
-}
-
-export interface RedTeamGateReport {
-  verdict: RedTeamVerdict
-  blocked: boolean
-  candidateId: string
-  benchmarkRunId?: string
-  checkedAt: string
-  checks: RedTeamCheck[]
+export interface RedTeamGateReport extends Omit<PromotionGateRun, 'id'> {
+  /** ID of the durable audit record for this gate evaluation. */
+  auditRecordId?: string
 }
 
 /**
@@ -46,7 +37,7 @@ export async function evaluateRedTeamPromotionGate(
 
   if (!latest) {
     add('evidence-present', 'INCONCLUSIVE', 'No benchmark record exists for this candidate.')
-    return report(candidate.id, checkedAt, checks)
+    return persistReport(deps, report(candidate.id, checkedAt, checks))
   }
 
   if (latest.mode === 'simulated') {
@@ -145,7 +136,35 @@ export async function evaluateRedTeamPromotionGate(
     add('record-attestation', 'PASS', 'Benchmark content matches its integrity attestation.')
   }
 
-  return report(candidate.id, checkedAt, checks, latest.id)
+  return persistReport(deps, report(candidate.id, checkedAt, checks, latest.id))
+}
+
+async function persistReport(
+  deps: ModuleDeps,
+  gate: RedTeamGateReport,
+): Promise<RedTeamGateReport> {
+  const { auditRecordId: _ignored, ...record } = gate
+  try {
+    const saved = await deps.store.addPromotionGateRun(record)
+    return { ...gate, auditRecordId: saved.id }
+  } catch (error) {
+    // Audit persistence failure is itself a blocker. We cannot claim PASS when
+    // the decision evidence was not durably retained.
+    const checks = [
+      ...gate.checks,
+      {
+        id: 'audit-persistence',
+        verdict: 'INCONCLUSIVE' as const,
+        detail: 'Could not persist the Red Team gate report: ' + String(error instanceof Error ? error.message : error),
+      },
+    ]
+    return {
+      ...gate,
+      verdict: gate.verdict === 'FAIL' ? 'FAIL' : 'INCONCLUSIVE',
+      blocked: true,
+      checks,
+    }
+  }
 }
 
 function report(
