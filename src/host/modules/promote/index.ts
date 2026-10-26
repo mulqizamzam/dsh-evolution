@@ -136,6 +136,15 @@ export async function executePromotion(
   const { materializeArtifact, validateArtifact } = await import('../activation/artifact.ts')
   const { refreshActivation } = await import('../activation/loader.ts')
 
+  // Defence in depth: executePromotion is exported for reuse, so it must not
+  // be callable as a policy bypass even if a future caller forgets the wrapper.
+  const entryPolicy = await evaluatePromotionPolicy(deps, candidate)
+  if (!entryPolicy.ok) {
+    await refreshActivation(deps)
+    throw new Error('promotion blocked by Red Team/policy gate: ' + entryPolicy.error)
+  }
+  capturedActiveMetrics = entryPolicy.activeMetrics
+
   // ── Resolve the composition base BEFORE any store mutation ──
   // The candidate is promoted on top of the currently active version (A).
   // Reading the active version before createVersion guarantees A is the base
@@ -198,6 +207,9 @@ export async function executePromotion(
   const finalPolicy = await evaluatePromotionPolicy(deps, candidate)
   if (!finalPolicy.ok) {
     await rm(join(store.getRoot(), 'versions', materializedVersionId), { recursive: true, force: true })
+    // activateVersion() may have mounted the candidate during preflight. Restore
+    // activation from the still-authoritative active pointer before returning.
+    await refreshActivation(deps)
     throw new Error('promotion aborted by final Red Team/policy recheck: ' + finalPolicy.error)
   }
   capturedActiveMetrics = finalPolicy.activeMetrics
