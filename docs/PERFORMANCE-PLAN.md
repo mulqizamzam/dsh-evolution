@@ -276,7 +276,9 @@ Ensures store mutation and pruning semantics are preserved with the new `.jsonl`
 ```bash
 npx vitest run
 ```
-Target met and exceeded: **701 passed / 0 failed / 2 skipped**. The baseline at `5e1431c` had 5 failures (696 passed); each was fixed at its root cause — see [Final State](#final-state-2026-10-26). The 2 skipped tests are `test/real-agnes-experiment.spec.ts`, which requires a live LLM endpoint.
+Target met and exceeded: **701 passed / 0 failed / 2 skipped**. The baseline at `5e1431c` had 5 failures (696 passed); each was fixed at its root cause — see [Final State](#final-state-2026-10-26).
+
+The 2 skipped tests are `test/builder-parser-live.spec.ts` and `test/builder-retry-live.spec.ts`, both gated behind `DSH_EVO_LIVE=1` via `describe.skipIf(!LIVE)`. Separately, `test/real-agnes-experiment.spec.ts` is **excluded** from the default script (`"test": "vitest run --exclude test/real-agnes-experiment.spec.ts"`) because it needs a live 9Router endpoint; run it explicitly with `npm run test:live`.
 
 ---
 
