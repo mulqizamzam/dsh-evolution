@@ -32,10 +32,12 @@ export interface RedTeamGateReport {
 export async function evaluateRedTeamPromotionGate(
   deps: ModuleDeps,
   candidate: CandidateModule,
+  evidenceSnapshot?: BenchmarkRun | null,
 ): Promise<RedTeamGateReport> {
   const checkedAt = new Date().toISOString()
-  const records = await deps.store.listBenchmarksByCandidate(candidate.id, true)
-  const latest = records[0] as BenchmarkRun | undefined
+  const latest = evidenceSnapshot === undefined
+    ? (await deps.store.listBenchmarksByCandidate(candidate.id, true))[0] as BenchmarkRun | undefined
+    : evidenceSnapshot ?? undefined
   const checks: RedTeamCheck[] = []
 
   const add = (id: string, verdict: RedTeamVerdict, detail: string) => {
@@ -48,7 +50,7 @@ export async function evaluateRedTeamPromotionGate(
   }
 
   if (latest.mode === 'simulated') {
-    add('evidence-mode', 'FAIL', 'Simulated evidence is not promotion-eligible.')
+    add('evidence-mode', 'FAIL', 'simulated evidence is not promotion-eligible.')
   } else if (latest.mode === 'live') {
     add('evidence-mode', 'PASS', 'Latest evidence is marked live.')
   } else {
