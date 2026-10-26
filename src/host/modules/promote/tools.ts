@@ -13,7 +13,7 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
   return [
     defineTool({
       name: 'evo_promote',
-      description: 'Promote a benchmarked candidate to the active version. The previous active version is marked rolled-back. Only candidates in benchmarked status are accepted.',
+      description: 'Promote a benchmarked candidate only after the shared Red Team evidence-integrity gate and all existing promotion checks pass. The previous active version is marked rolled-back.'
       parameters: {
         type: 'object',
         properties: {
@@ -108,6 +108,7 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           ok: true,
           version: result.version,
           candidateId,
+          redTeamGate: policyResult.redTeamGate,
           activation: { mountedVersionId: state.activeVersionId, mountedTool: state.activeTool, reason: state.reason },
         })
       },
@@ -217,10 +218,10 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
         const candidate = await store.getCandidate(candidateId)
         if (!candidate) return neutralizeDeep({ ok: false, error: 'no candidate ' + candidateId })
 
-        // The decision tool must never advise promotion when the shared runtime
-        // gate would block it. allowSimulated is advisory only and cannot bypass
-        // this trust boundary.
-        const redTeamGate = await evaluateRedTeamPromotionGate(deps, candidate)
+        // Use the exact candidate evidence snapshot that the gate evaluates.
+        const candidateBenchmarks = await store.listBenchmarksByCandidate(candidateId, true)
+        const latest = candidateBenchmarks[0]
+        const redTeamGate = await evaluateRedTeamPromotionGate(deps, candidate, latest ?? null)
         if (redTeamGate.verdict !== 'PASS') {
           return neutralizeDeep({
             ok: false,
@@ -231,10 +232,7 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           })
         }
 
-        // Find latest benchmark for this candidate
         const allBenchmarks = await store.listBenchmarks(500)
-        const candidateBenchmarks = await store.listBenchmarksByCandidate(candidateId, true)
-        const latest = candidateBenchmarks[0]
         if (!latest) {
           return neutralizeDeep({
             ok: false,
@@ -242,19 +240,8 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           })
         }
 
-        // Simulated runs are inferred from stored experience, not measured by
-        // execution, so they cannot justify a promotion on their own.
-        const evidenceMode = latest.mode ?? 'simulated'
-        if (evidenceMode !== 'live' && a.allowSimulated !== true) {
-          return neutralizeDeep({
-            ok: false,
-            evidenceMode,
-            benchmarkRunId: latest.id,
-            error: 'the latest benchmark evidence is SIMULATED, not execution evidence;'
-              + ' run evo_benchmark_live or evo_benchmark_ab to produce live evidence,'
-              + ' or pass allowSimulated true to decide on simulated data explicitly',
-          })
-        }
+        // PASS guarantees that this is current, sealed, attested live evidence.
+        const evidenceMode = latest.mode ?? 'unknown'
 
         const policy = DEFAULT_PROMOTION_POLICY
         const thresholdCfg = candidate.benchmarkConfig
