@@ -111,10 +111,10 @@ describe('M3.3 — Provenance & Metrics Integrity Regression', () => {
       // as outside the protection offered by an unkeyed persisted-record digest.
       const createdAt = isoDateTime(new Date())
       const command = 'node test.js'
-      const recomputedSeal = createLiveProvenance(v2Id, 'v-temp', command, createdAt)
+      const recomputedSeal = createLiveProvenance(v2Id, 'v1', command, createdAt)
 
       await store.addBenchmark({
-        candidateId: v2Id, version: 'v-temp', baseline: 'unknown', runs: 3,
+        candidateId: v2Id, version: 'v1', baseline: 'unknown', runs: 3,
         metrics: { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
         passed: true, details: 'privileged store write', mode: 'live', command,
         provenance: recomputedSeal,
