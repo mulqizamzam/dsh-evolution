@@ -22,6 +22,7 @@ import * as activationModule from './modules/activation/index.ts'
 import * as versionHistoryModule from './modules/version-history/index.ts'
 import * as evidenceScoreModule from './modules/evidence-score/index.ts'
 import * as shadowEvaluationModule from './modules/shadow-evaluation/index.ts'
+import * as memoryLifecycleModule from './modules/memory-lifecycle/index.ts'
 
 export const name = 'dsh-evolution'
 
@@ -57,6 +58,7 @@ export const MODULES: EvoModule[] = [
   versionHistoryModule,
   evidenceScoreModule,
   shadowEvaluationModule,
+  memoryLifecycleModule,
 ] as unknown as EvoModule[]
 
 /**
