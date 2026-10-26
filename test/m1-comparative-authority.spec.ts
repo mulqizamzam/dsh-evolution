@@ -40,9 +40,12 @@ async function runBenchmark(
 ) {
   const createdAt = isoDateTime(new Date())
   const command = 'node candidate-under-test.js'
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
+  const version = candidate.parentVersion
   await store.addBenchmark({
     candidateId,
-    version: 'v-temp',
+    version,
     baseline: 'unknown',
     runs: 10,
     metrics: {
@@ -58,7 +61,7 @@ async function runBenchmark(
     mode,
     ...(mode === 'live' ? {
       command,
-      provenance: createLiveProvenance(candidateId, 'v-temp', command, createdAt),
+      provenance: createLiveProvenance(candidateId, version, command, createdAt),
     } : {}),
   }, createdAt)
   await store.updateCandidate(candidateId, { status: 'benchmarked' })
