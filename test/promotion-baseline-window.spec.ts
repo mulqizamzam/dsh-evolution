@@ -98,7 +98,7 @@ describe('promotion gates do not depend on the benchmark list window', () => {
       await store.createVersion({ label: 'v1', reason: 'release', promotedFrom: 'v0', modules: [v1.id] })
 
       const v2 = await seedCandidate(store, 'v2', 'v1')
-      await addLive(store, v2.id, 0.60, { sealed: true })
+      await addLive(store, v2.id, 0.81, { sealed: true })
 
       // Control: with the baseline inside the window the gate rejects.
       const control = await evaluatePromotionPolicy(deps, (await store.getCandidate(v2.id))!)
@@ -138,7 +138,7 @@ describe('promotion gates do not depend on the benchmark list window', () => {
 
       const policy = await evaluatePromotionPolicy(deps, (await store.getCandidate(v2.id))!)
       expect(policy.ok).toBe(false)
-      if (!policy.ok) expect(policy.error).toMatch(/provenance seal missing/)
+      if (!policy.ok) expect(policy.error).toMatch(/provenance-seal|no provenance seal/i)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
