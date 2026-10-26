@@ -266,11 +266,13 @@ export class EvolutionStore {
     })
 
     let removed = 0
+    const removedIds = new Set<string>()
     // Phase 1: remove expired records (TTL)
     for (const r of records) {
       const ts = new Date(r.timestamp).getTime()
       if (ts < cutoff) {
         await removeFile(join(this.experienceDir(), r.file))
+        removedIds.add(r.id)
         removed++
       }
     }
@@ -279,17 +281,36 @@ export class EvolutionStore {
     const nonExpired = records.filter(r => new Date(r.timestamp).getTime() >= cutoff)
     if (nonExpired.length > maxRecords) {
       const toRemove = nonExpired.slice(0, nonExpired.length - maxRecords)
-      const kept = nonExpired.filter(r => !toRemove.some(t => t.id === r.id))
-      // Rewrite .jsonl with only kept records for consistency.
-      const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
-      if (kept.length > 0) {
-        await writeJsonlAtomic(jsonlPath, kept.map(r => r.record))
-      } else {
-        await removeFile(jsonlPath)
-      }
       for (const r of toRemove) {
         await removeFile(join(this.experienceDir(), r.file))
+        removedIds.add(r.id)
         removed++
+      }
+    }
+
+    // Phase 3: reconcile the .jsonl batch file.
+    // `listExperiences()` reads experiences.jsonl as the authoritative source,
+    // so a prune that only deletes .json files leaves the pruned records
+    // visible on read. Every phase that removes something must therefore
+    // rewrite the batch file from the surviving records.
+    if (removed > 0) {
+      const kept = records.filter(r => !removedIds.has(r.id))
+      const keptIds = new Set(kept.map(r => r.id))
+      // Preserve records that exist only in .jsonl (e.g. a .json write was
+      // lost): dropping them here would silently delete live data.
+      const jsonlOnly = (await readJsonlSafe(join(this.experienceDir(), 'experiences.jsonl')))
+        .filter((r): r is ExperienceRecord => {
+          if (!r || typeof r !== 'object') return false
+          const rec = r as ExperienceRecord
+          return typeof rec.id === 'string' && typeof rec.timestamp === 'string'
+            && !keptIds.has(rec.id) && !removedIds.has(rec.id)
+        })
+      const survivors = [...kept.map(r => r.record), ...jsonlOnly]
+      const jsonlPath = join(this.experienceDir(), 'experiences.jsonl')
+      if (survivors.length > 0) {
+        await writeJsonlAtomic(jsonlPath, survivors)
+      } else {
+        await removeFile(jsonlPath)
       }
     }
 
