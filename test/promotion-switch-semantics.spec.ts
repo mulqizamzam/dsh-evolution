@@ -63,8 +63,14 @@ function makeDeps(store: EvolutionStore, root: string, generationEnabled = false
     cfg: () => resolveConfig({
       stateRoot: root,
       evolution: {
+        enabled: true,
+        autoRecord: true,
+        autoTrigger: false,
+        analysis: { minExperiences: 5, minOccurrences: 3 },
         generation: { enabled: generationEnabled },
         promotion: { enabled: false },
+        maxCyclesPerProcess: 10,
+        cycleDebounceMs: 0,
       },
     }),
     store,
