@@ -23,7 +23,10 @@ export interface EvoConfig {
       enabled: boolean
     }
     promotion: {
-      /** Gate automatic promotion in evo_full_cycle/the autonomous loop; explicit evo_promote and evo_rollback calls remain available. */
+      /**
+     * Gate automatic promotion in evo_full_cycle/the autonomous loop.
+     * Explicit evo_promote and evo_rollback calls remain available.
+     */
       enabled: boolean
     }
     /** Hard cap on autonomous cycles per host process (loop safety). */
