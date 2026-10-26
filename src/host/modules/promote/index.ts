@@ -16,16 +16,15 @@ export const writeEndpoints = {}
  * authority for every promotion path — `evo_promote` and `evo_full_cycle` both
  * route through here, so a rule enforced here is enforced everywhere.
  *
- * Two gates, in order:
+ * Three gates, in order:
  *
- *  1. **Evidence gate** — a candidate whose latest benchmark record has
- *     `mode === 'simulated'` is rejected unconditionally, including when no
- *     active version exists. Ratified as contract C-1 in `docs/CONTRACTS.md`.
- *  2. **Comparative gate (`beats_active`)** — the candidate's live metrics must
- *     strictly beat the active version's. Returns the captured active metrics
- *     (for provenance) on success, or `undefined` when the gate is skipped
- *     because there is no comparable active baseline (first version, or no
- *     benchmark on the active module). Tie with active = reject (monotonicity).
+ *  1. **Red Team integrity gate (C-3)** — only PASS can proceed. FAIL and
+ *     INCONCLUSIVE block promotion and carry an auditable report.
+ *  2. **Evidence gate (C-1)** — simulated evidence is always rejected, including
+ *     when no active version exists.
+ *  3. **Comparative gate (`beats_active`)** — live candidate metrics must
+ *     strictly beat the active version's when a comparable baseline exists.
+ *     Tie with active = reject (monotonicity).
  *
  * Returns { ok: false, error } when the candidate fails either gate.
  *
