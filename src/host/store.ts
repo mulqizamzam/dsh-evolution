@@ -67,6 +67,18 @@ export const SCHEMA_VERSION = 1
 const CACHE_TTL_MS = 5_000
 
 /**
+ * Minimum elapsed time (ms) between automatic prune runs.
+ *
+ * `pruneExperiences` does a full directory scan, reads every experience file,
+ * sorts, and potentially rewrites the .jsonl batch — O(n) disk I/O. Calling it
+ * on every `addExperience` (the hot path: every completed task) would burden
+ * the host with redundant scans. `maybePruneExperiences` gates the call behind
+ * this interval so pruning runs at most once per process-hour while still
+ * cleaning up on process start (lastPruneAt = 0).
+ */
+export const PRUNE_INTERVAL_MS = 30 * 60 * 1000
+
+/**
  * In-memory cache entry for list operations. Keyed by "(method,limit)".
  */
 type CacheEntry<T> = { ts: number; value: T }
@@ -82,6 +94,8 @@ export class EvolutionStore {
   private readonly _experienceByVersion = new Map<string, ExperienceRecord[]>()
   /** In-flight .jsonl migration; shared so concurrent first reads migrate once. */
   private jsonlMigration: Promise<void> | null = null
+  /** Timestamp of the last prune run; 0 means "never pruned in this process". */
+  private lastPruneAt: number = 0
 
   constructor(options: StoreOptions) {
     this.root = resolveStateRoot(options.get, options.fallbackRoot, options.profileName)
@@ -354,6 +368,25 @@ export class EvolutionStore {
 
     this.invalidateCache()
     return removed
+  }
+
+  /**
+   * Time-gated wrapper around {@link pruneExperiences}.
+   *
+   * On the hot path — every completed task triggers `addExperience`, which
+   * triggers a fire-and-forget prune. Running the full prune (O(n) disk scan)
+   * on every write is wasteful: retention and count caps are best-effort
+   * cleanup, not per-write correctness. This method skips the expensive scan
+   * when a prune ran within the last {@link PRUNE_INTERVAL_MS}, and always
+   * prunes on the first call after process start (`lastPruneAt === 0`).
+   *
+   * @returns the number of records removed (0 when skipped).
+   */
+  async maybePruneExperiences(maxRecords: number, retentionDays: number): Promise<number> {
+    const now = this.nowFn().getTime()
+    if (this.lastPruneAt > 0 && now - this.lastPruneAt < PRUNE_INTERVAL_MS) return 0
+    this.lastPruneAt = now
+    return this.pruneExperiences(maxRecords, retentionDays)
   }
 
   /**

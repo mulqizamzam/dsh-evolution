@@ -580,8 +580,11 @@ export function apply(deps: ModuleDeps): void {
       }).then(async () => {
         // Enforce retention and count cap so the store stays within configured limits.
         // Failures are fire-and-forget: they must not block pattern analysis.
+        // Uses time-gated pruning (maybePruneExperiences) to avoid an O(n) disk
+        // scan on every completed task — pruning runs at most once per process
+        // hour, and always on the first experience after process start.
         const expCfg = deps.cfg().experience
-        try { await deps.store.pruneExperiences(expCfg.maxRecords, expCfg.retentionDays) } catch { /* ignore prune failures */ }
+        try { await deps.store.maybePruneExperiences(expCfg.maxRecords, expCfg.retentionDays) } catch { /* ignore prune failures */ }
         void runAutoCycle(deps)
       }).catch(() => { /* observation must never break the turn */ })
     } catch {

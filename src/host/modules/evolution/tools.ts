@@ -122,6 +122,40 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
       output: { schema: JSON_OBJECT_OUTPUT, render: RENDER },
       execute: async (args: never) => {
         const a = (args ?? {}) as Record<string, unknown>
+
+        // ── INPUT VALIDATION (trust boundary) ──────────────────────────
+        // Validate apiUrl/apiKey/model/testCommand BEFORE any analysis, LLM,
+        // or sandbox work. Rejects malformed URLs, empty credentials, and
+        // commands that would silently coerce to "undefined" — fail fast at
+        // the trust boundary rather than deep in the cycle.
+        const apiUrl = typeof a.apiUrl === 'string' ? a.apiUrl.trim() : ''
+        if (!apiUrl) {
+          return neutralizeDeep({ ok: false, steps: [], error: 'evo_full_cycle: apiUrl is required and must be a non-empty string' })
+        }
+        try {
+          const parsed = new URL(apiUrl)
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            return neutralizeDeep({ ok: false, steps: [], error: 'evo_full_cycle: apiUrl must use http: or https: scheme (got ' + parsed.protocol + ')' })
+          }
+        } catch {
+          return neutralizeDeep({ ok: false, steps: [], error: 'evo_full_cycle: apiUrl must be a valid URL' })
+        }
+
+        const apiKey = typeof a.apiKey === 'string' ? a.apiKey.trim() : ''
+        if (!apiKey) {
+          return neutralizeDeep({ ok: false, steps: [], error: 'evo_full_cycle: apiKey is required and must be a non-empty string' })
+        }
+
+        const model = typeof a.model === 'string' ? a.model.trim() : ''
+        if (!model) {
+          return neutralizeDeep({ ok: false, steps: [], error: 'evo_full_cycle: model is required and must be a non-empty string' })
+        }
+
+        const testCommand = typeof a.testCommand === 'string' ? a.testCommand.trim() : ''
+        if (!testCommand) {
+          return neutralizeDeep({ ok: false, steps: [], error: 'evo_full_cycle: testCommand is required and must be a non-empty string' })
+        }
+
         const steps: string[] = []
 
         // ── SAFETY GATE ──
@@ -201,9 +235,9 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
           buildResult = (await genTool.execute({
             patternIds: [strongestPattern.id],
             parentVersion,
-            apiUrl: String(a.apiUrl),
-            apiKey: String(a.apiKey),
-            model: String(a.model),
+            apiUrl,
+            apiKey,
+            model,
           } as never, { signal: AbortSignal.timeout(180_000) })) as Record<string, unknown>
         } catch (error) {
           // LLM build failed - keep the draft candidate as-is
@@ -251,7 +285,7 @@ export function evolutionTools(deps: ModuleDeps): ToolDefinition[] {
           if (liveTool) {
             benchResult = (await liveTool.execute({
               candidateId: generatedCandidateId,
-              command: String(a.testCommand),
+              command: testCommand,
               timeoutMs: 30000,
             } as never, { signal: AbortSignal.timeout(120_000) })) as Record<string, unknown>
           }

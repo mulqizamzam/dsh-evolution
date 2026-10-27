@@ -3,6 +3,7 @@ import type { ModuleDeps, ToolDefinition } from '../../types.ts'
 import { DEFAULT_PROMOTION_POLICY } from '../../types.ts'
 import { clampText } from '../../../lib/caps.ts'
 import { neutralizeDeep } from '../../../lib/sanitize.ts'
+import { isSafeKey } from '../../../lib/ids.ts'
 import { evaluatePromotionPolicy, executePromotion } from './index.ts'
 const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'text'; text: string }> => text(value)
 
@@ -24,7 +25,10 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
       output: { schema: JSON_OBJECT_OUTPUT, render: RENDER },
       execute: async (args: never) => {
         const a = (args ?? {}) as Record<string, unknown>
-        const candidateId = typeof a.candidateId === 'string' ? a.candidateId : ''
+        const candidateId = typeof a.candidateId === 'string' ? a.candidateId.trim() : ''
+        if (!isSafeKey(candidateId)) {
+          return neutralizeDeep({ ok: false, error: 'candidateId must be a safe key (alphanumeric, dot, dash, underscore)' })
+        }
         const candidate = await store.getCandidate(candidateId)
         if (!candidate) return neutralizeDeep({ ok: false, error: 'no candidate ' + candidateId })
         if (candidate.status !== 'benchmarked') {
@@ -223,7 +227,10 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
       output: { schema: JSON_OBJECT_OUTPUT, render: RENDER },
       execute: async (args: never) => {
         const a = (args ?? {}) as Record<string, unknown>
-        const candidateId = typeof a.candidateId === 'string' ? a.candidateId : ''
+        const candidateId = typeof a.candidateId === 'string' ? a.candidateId.trim() : ''
+        if (!isSafeKey(candidateId)) {
+          return neutralizeDeep({ ok: false, error: 'candidateId must be a safe key (alphanumeric, dot, dash, underscore)' })
+        }
 
         // Load candidate
         const candidate = await store.getCandidate(candidateId)
