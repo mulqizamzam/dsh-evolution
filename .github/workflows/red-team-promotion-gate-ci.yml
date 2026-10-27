@@ -31,6 +31,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap
 
+      - name: Diagnose Bubblewrap isolation support
+        continue-on-error: true
+        run: |
+          id
+          ls -l /usr/bin/bwrap
+          bwrap --version
+          echo "=== unprivileged namespace test ==="
+          bwrap --die-with-parent --ro-bind /usr /usr --proc /proc --dev /dev /bin/sh -c 'echo bwrap-ok'
+          echo "=== user namespace test ==="
+          unshare -Ur true
+
       - name: Install locked dependencies
         run: npm ci
 
