@@ -30,6 +30,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
+          # GitHub-hosted runners disable unprivileged user namespaces.
+          # Enable Bubblewrap's setuid mode on this disposable runner so isolation tests execute.
+          sudo chmod u+s /usr/bin/bwrap
+
+      - name: Verify Bubblewrap isolation support
+        run: |
+          ls -l /usr/bin/bwrap
+          bwrap --version
+          bwrap --die-with-parent --unshare-pid --unshare-net --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib /lib --ro-bind /lib64 /lib64 --proc /proc --dev /dev /bin/sh -c 'echo bwrap-ok'
 
       - name: Install locked dependencies
         run: npm ci
