@@ -33,6 +33,7 @@ import { makeFakeHost } from './helpers/fake-host.ts'
 import type { FakeHost } from './helpers/fake-host.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
 import { resetActivation } from '../src/host/modules/activation/loader.ts'
+import { addSealedLiveBenchmark } from './helpers/live-evidence.ts'
 
 const BOOT = '../src/host/index.ts'
 const GOOD_ENTRY = 'export default function verify(): boolean { return true }\nconsole.log("CANDIDATE_RAN")\n'
@@ -64,7 +65,7 @@ async function seedCandidate(store: EvolutionStore, name: string, successRate: n
       avgDurationMs: { max: 60000, weight: 0.5 },
     },
   })
-  await store.addBenchmark({
+  await addSealedLiveBenchmark(store, {
     mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
     metrics: { successRate, avgScore: successRate, errorRate: 0, avgSteps: 0, avgDurationMs: 120 },
     passed: true, details: 'live evidence', createdAt: new Date().toISOString(),
