@@ -71,11 +71,12 @@ async function addLive(
 /** Push the baseline record out of listBenchmarks(500), which slices by count. */
 async function pushBaselineOutOfWindow(store: EvolutionStore, record: BenchmarkRun, fillers: number): Promise<void> {
   for (let i = 0; i < fillers; i++) {
+    const fillerCreatedAt = new Date().toISOString()
     await store.addBenchmark({
       candidateId: 'filler-' + i, version: 'v-filler', baseline: 'unknown', runs: 1,
       metrics: { successRate: 0, avgScore: 0, errorRate: 1, avgSteps: 0, avgDurationMs: 1 },
       passed: false, details: 'filler ' + i, mode: 'simulated',
-    })
+    }, fillerCreatedAt)
   }
   // Precondition: the windowed list must no longer see the baseline record,
   // while the record itself is still on disk.

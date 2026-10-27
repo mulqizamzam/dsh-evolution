@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, readFile, writeFile, access, readdir } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, writeFile, access, readdir, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
@@ -18,6 +18,7 @@ import { makeFakeHost } from './helpers/fake-host.ts'
 import type { FakeHost } from './helpers/fake-host.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
 import { resetActivation } from '../src/host/modules/activation/loader.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 
 const BOOT = '../src/host/index.ts'
 const GOOD_ENTRY = 'export default function verify(): boolean { return true }\nconsole.log("CANDIDATE_RAN")\n'
@@ -50,15 +51,7 @@ async function seedBenchmarkedCandidate(store: EvolutionStore, entry: string) {
     },
     status: 'draft',
   })
-  const benchCreatedAt = new Date().toISOString()
-  const benchCommand = 'node candidate-under-test.js'
-  await store.addBenchmark({
-    mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
-    command: benchCommand,
-    provenance: createLiveProvenance(candidate.id, 'v1', benchCommand, benchCreatedAt),
-    metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 0, avgDurationMs: 120 },
-    passed: true, details: 'live evidence',
-}, benchCreatedAt)
+  await seedLiveBenchmark(store, candidate.id, 'v1', 'v1', { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 0, avgDurationMs: 120 })
   await store.updateCandidate(candidate.id, { status: 'benchmarked' })
   return candidate
 }
@@ -114,15 +107,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    const benchCreatedAt = new Date().toISOString()
-    const benchCommand = 'node candidate-under-test.js'
-    await store.addBenchmark({
-      mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      command: benchCommand,
-      provenance: createLiveProvenance(candidate.id, 'v1', benchCommand, benchCreatedAt),
-      metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 120 },
-      passed: true, details: 'live evidence',
-}, benchCreatedAt)
+    await seedLiveBenchmark(store, candidate.id, 'v1', 'v1', { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 120 })
     await store.updateCandidate(candidate.id, { status: 'benchmarked' })
 
     await promoteTools(deps).find(t => t.name === 'evo_promote')!
@@ -145,15 +130,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    const benchCreatedAt2 = new Date().toISOString()
-    const benchCommand2 = 'node candidate-under-test.js'
-    await store.addBenchmark({
-      mode: 'live', candidateId: candidate2.id, version: 'v2', baseline: 'v2', runs: 3,
-      command: benchCommand2,
-      provenance: createLiveProvenance(candidate2.id, 'v2', benchCommand2, benchCreatedAt2),
-      metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0.01, avgSteps: 4, avgDurationMs: 115 },
-      passed: true, details: 'live evidence',
-}, benchCreatedAt2)
+    await seedLiveBenchmark(store, candidate2.id, 'v2', 'v2', { successRate: 0.96, avgScore: 0.96, errorRate: 0.01, avgSteps: 4, avgDurationMs: 115 })
     await store.updateCandidate(candidate2.id, { status: 'benchmarked' })
 
     const result = await promoteTools(deps).find(t => t.name === 'evo_promote')!
@@ -194,15 +171,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    const benchCreatedAt = new Date().toISOString()
-    const benchCommand = 'node candidate-under-test.js'
-    await store.addBenchmark({
-      mode: 'live', candidateId: brokenCandidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      command: benchCommand,
-      provenance: createLiveProvenance(brokenCandidate.id, 'v1', benchCommand, benchCreatedAt),
-      metrics: { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'simulated',
-}, benchCreatedAt)
+    await seedLiveBenchmark(store, brokenCandidate.id, 'v1', 'v1', { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'simulated' })
     await store.updateCandidate(brokenCandidate.id, { status: 'benchmarked' })
 
     const result = await promoteTools(deps).find(t => t.name === 'evo_promote')!
@@ -273,15 +242,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    const benchCreatedAt = new Date().toISOString()
-    const benchCommand = 'node candidate-under-test.js'
-    await store.addBenchmark({
-      mode: 'live', candidateId: broken.id, version: 'v1', baseline: 'v1', runs: 3,
-      command: benchCommand,
-      provenance: createLiveProvenance(broken.id, 'v1', benchCommand, benchCreatedAt),
-      metrics: { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'simulated',
-}, benchCreatedAt)
+    await seedLiveBenchmark(store, broken.id, 'v1', 'v1', { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'simulated' })
     await store.updateCandidate(broken.id, { status: 'benchmarked' })
 
     const result = await promoteTools(deps).find(t => t.name === 'evo_promote')!
@@ -441,15 +402,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    const benchCreatedAt = new Date().toISOString()
-    const benchCommand = 'node candidate-under-test.js'
-    await store.addBenchmark({
-      mode: 'live', candidateId: emptyCandidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      command: benchCommand,
-      provenance: createLiveProvenance(emptyCandidate.id, 'v1', benchCommand, benchCreatedAt),
-      metrics: { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'simulated',
-}, benchCreatedAt)
+    await seedLiveBenchmark(store, emptyCandidate.id, 'v1', 'v1', { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'simulated' })
     await store.updateCandidate(emptyCandidate.id, { status: 'benchmarked' })
 
     // First attempt: fails because candidate has no files
@@ -475,15 +428,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    const benchCreatedAt2 = new Date().toISOString()
-    const benchCommand2 = 'node candidate-under-test.js'
-    await store.addBenchmark({
-      mode: 'live', candidateId: validCandidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      command: benchCommand2,
-      provenance: createLiveProvenance(validCandidate.id, 'v1', benchCommand2, benchCreatedAt2),
-      metrics: { successRate: 1.0, avgScore: 1.0, errorRate: 0, avgSteps: 0, avgDurationMs: 120 },
-      passed: true, details: 'live evidence',
-}, benchCreatedAt2)
+    await seedLiveBenchmark(store, validCandidate.id, 'v1', 'v1', { successRate: 1.0, avgScore: 1.0, errorRate: 0, avgSteps: 0, avgDurationMs: 120 })
     await store.updateCandidate(validCandidate.id, { status: 'benchmarked' })
 
     const result2 = await promoteTools(deps).find(t => t.name === 'evo_promote')!
@@ -531,6 +476,3 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
     expect(versions.length).toBe(2)
   })
 })
-
-import { mkdir } from 'node:fs/promises'
-import { createLiveProvenance } from '../src/lib/provenance.ts'

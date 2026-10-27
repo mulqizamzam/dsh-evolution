@@ -30,8 +30,7 @@ import { resolveConfig } from '../src/host/config.ts'
 import { makeFakeHost } from './helpers/fake-host.ts'
 import type { FakeHost } from './helpers/fake-host.ts'
 import type { ModuleDeps, CandidateModule, Version } from '../src/host/types.ts'
-import { isoDateTime } from '../src/lib/ids.ts'
-import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 import {
   materializeArtifact, validateArtifact, readArtifactManifest,
   artifactFilesDir, readBaseArtifactFiles,
@@ -97,22 +96,8 @@ async function seedCandidate(
   })
   if (opts?.withBenchmark !== false) {
     const rate = opts?.successRate ?? 0.99
-    const createdAt = isoDateTime(new Date())
     const version = candidate.parentVersion
-    const command = 'node candidate-under-test.js'
-    await store.addBenchmark({
-      mode: 'live',
-      candidateId: candidate.id,
-      version,
-      baseline: version,
-      parentVersion: version,
-      command,
-      provenance: createLiveProvenance(candidate.id, version, command, createdAt),
-      runs: 3,
-      metrics: { successRate: rate, avgScore: rate, errorRate: 0, avgSteps: 3, avgDurationMs: 100 },
-      passed: true,
-      details: 'live evidence for composition test',
-    }, createdAt)
+    await seedLiveBenchmark(store, candidate.id, version, version, { successRate: rate, avgScore: rate, errorRate: 0, avgSteps: 3, avgDurationMs: 100 }, { details: 'live evidence for composition test' })
   }
   await store.updateCandidate(candidate.id, { status: opts?.status ?? 'benchmarked' })
   return candidate
@@ -322,15 +307,7 @@ describe('Cumulative version composition', () => {
       files: [{ path: '../escape.js', content: 'pwn' }],
       tests: [], benchmarkConfig: { ...BENCH_CFG }, status: 'benchmarked',
     })
-    const benchCreatedAt = new Date().toISOString()
-    const benchCommand = 'node candidate-under-test.js'
-    await store.addBenchmark({
-      mode: 'live', candidateId: evil.id, version: 'v2', baseline: 'v2', runs: 3,
-      command: benchCommand,
-      provenance: createLiveProvenance(evil.id, 'v2', benchCommand, benchCreatedAt),
-      metrics: { successRate: 0.999, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 50 },
-      passed: true, details: 'live',
-}, benchCreatedAt)
+    await seedLiveBenchmark(store, evil.id, 'v2', 'v2', { successRate: 0.999, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 50 }, { details: 'live' })
     const evilResult = await promote(deps, evil.id, 'evil')
     expect(evilResult.ok).toBe(false)
     expect(String(evilResult.error)).toMatch(/escape the artifact files root/)

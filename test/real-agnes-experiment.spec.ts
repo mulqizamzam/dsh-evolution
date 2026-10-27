@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 import type { ModuleDeps, HostLlmGenerateOptions, HostLlmStreamChunk } from '../src/host/types.ts'
 import type { HostContextShape } from '../src/host/dsh.ts'
 import { experienceTools } from '../src/host/modules/experience/tools.ts'
@@ -153,7 +154,7 @@ describe('REAL AGNES AUTONOMOUS EVOLUTION EXPERIMENT', () => {
     const stdout = (r.executionResult as { stdout?: string } | undefined)?.stdout ?? String(r.stdout ?? '')
     expect(r.passed).toBe(false)
     expect(stdout.trim().split('\n')[0]).toBe('epsilon')
-    await store.addBenchmark({ candidateId: v1cand.id, version: 'v1', baseline: 'v1', runs: 3, metrics: { successRate: 0, avgScore: 0, errorRate: 0, avgSteps: 1, avgDurationMs: 200 }, passed: false, details: 'v1 failed oracle', mode: 'live', expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE })
+    await seedLiveBenchmark(store, v1cand.id, 'v1', 'v1', { successRate: 0, avgScore: 0, errorRate: 0, avgSteps: 1, avgDurationMs: 200 }, { passed: false, details: 'v1 failed oracle' })
     await store.updateCandidate(v1cand.id, { status: 'benchmarked' })
   }, 30_000)
 

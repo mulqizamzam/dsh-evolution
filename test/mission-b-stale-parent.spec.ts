@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { EvolutionStore } from '../src/host/store.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
 import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 import { resolveConfig } from '../src/host/config.ts'
 import { makeFakeHost } from './helpers/fake-host.ts'
 import type { FakeHost } from './helpers/fake-host.ts'
@@ -83,21 +84,8 @@ async function seedCandidate(
   })
   if (opts?.withBenchmark !== false) {
     const rate = opts?.successRate ?? 0.99
-    const createdAt = isoDateTime(new Date())
-    const command = 'node candidate-under-test.js'
-    await store.addBenchmark({
-      mode: 'live',
-      candidateId: candidate.id,
-      version: candidate.parentVersion,
-      baseline: candidate.parentVersion,
-      parentVersion: candidate.parentVersion,
-      runs: 3,
-      metrics: { successRate: rate, avgScore: rate, errorRate: 0, avgSteps: 3, avgDurationMs: 100 },
-      passed: true,
-      details: 'live evidence for mission-b',
-      command,
-      provenance: createLiveProvenance(candidate.id, candidate.parentVersion, command, createdAt),
-    }, createdAt)
+    const version = candidate.parentVersion
+    await seedLiveBenchmark(store, candidate.id, version, version, { successRate: rate, avgScore: rate, errorRate: 0, avgSteps: 3, avgDurationMs: 100 }, { details: 'live evidence for mission-b' })
   }
   await store.updateCandidate(candidate.id, { status: opts?.status ?? 'benchmarked' })
   return candidate
@@ -228,6 +216,8 @@ describe('Mission B — stale parentVersion', () => {
       benchmarkConfig: { ...BENCH_CFG },
       status: 'draft',
     })
+    const directCreatedAt = isoDateTime(new Date())
+    const directCommand = 'node candidate-under-test.js'
     const directRecord = await store.addBenchmark({
       mode: 'live',
       candidateId: staleCandidate.id,
@@ -238,8 +228,9 @@ describe('Mission B — stale parentVersion', () => {
       metrics: { successRate: 0.95, avgScore: 0.9, errorRate: 0, avgSteps: 3, avgDurationMs: 100 },
       passed: true,
       details: 'direct stamping check',
-      createdAt: new Date().toISOString(),
-    })
+      command: directCommand,
+      provenance: createLiveProvenance(staleCandidate.id, staleCandidate.parentVersion, directCommand, directCreatedAt),
+    }, directCreatedAt)
     // Core assertion: version means creation parent, NOT executed baseline.
     // Citations: benchmark/tools.ts:374-379 (live), 193-197 (simulated), 631-646 (ab)
     expect(directRecord.version).toBe('v1')
@@ -366,6 +357,8 @@ describe('Mission B — stale parentVersion', () => {
       } else {
         // Sandbox unavailable for A/B — characterize via store-level A/B-shaped record
         // that must have version != baseline when parentVersion is stale.
+        const abCreatedAt = isoDateTime(new Date())
+        const abCommand = 'node candidate-under-test.js'
         const abShaped = await store.addBenchmark({
           mode: 'live',
           candidateId: abCandidate.id,
@@ -376,8 +369,9 @@ describe('Mission B — stale parentVersion', () => {
           metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 50 },
           passed: true,
           details: 'ab shape fallback — sandbox unavailable, documenting code contract',
-          createdAt: new Date().toISOString(),
-        })
+          command: abCommand,
+          provenance: createLiveProvenance(abCandidate.id, abCandidate.parentVersion, abCommand, abCreatedAt),
+        }, abCreatedAt)
         expect(abShaped.version).toBe('v1')
         expect(abShaped.baseline).toBe(activeModuleId)
         expect(abShaped.version).not.toBe(abShaped.baseline)

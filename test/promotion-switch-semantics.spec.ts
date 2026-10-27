@@ -4,8 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
-import { isoDateTime } from '../src/lib/ids.ts'
-import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
 import { promoteTools } from '../src/host/modules/promote/tools.ts'
 import { evolutionTools } from '../src/host/modules/evolution/tools.ts'
@@ -94,27 +93,9 @@ async function addCandidateWithLiveEvidence(store: EvolutionStore) {
     benchmarkConfig: BENCHMARK_CONFIG,
   })
 
-  const createdAt = isoDateTime(new Date())
-  const command = 'node candidate.js'
-  await store.addBenchmark({
-    candidateId: candidate.id,
-    version: 'v0',
-    baseline: 'unknown',
-    runs: 3,
-    metrics: {
-      successRate: 1,
-      avgScore: 1,
-      errorRate: 0,
-      avgSteps: 1,
-      avgDurationMs: 10,
-    },
-    passed: true,
-    details: 'test live evidence',
-    createdAt,
-    command,
-    provenance: createLiveProvenance(candidate.id, 'v0', command, createdAt) ?? undefined,
-    mode: 'live',
-  }, createdAt)
+  await seedLiveBenchmark(store, candidate.id, 'v0', 'unknown', {
+    successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 10,
+  }, { passed: true, details: 'test live evidence', command: 'node candidate.js', runs: 3 })
   return candidate
 }
 

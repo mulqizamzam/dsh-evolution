@@ -37,6 +37,7 @@
     "prepare": "npm run build",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json",
     "test": "vitest run --exclude test/real-agnes-experiment.spec.ts",
     "test:live": "vitest run test/real-agnes-experiment.spec.ts"
   },

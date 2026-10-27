@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { resolveStateRoot } from '../src/lib/home.ts'
 import { EvolutionStore } from '../src/host/store.ts'
-import { isoDateTime } from '../src/lib/ids.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 
 describe('RESOLVE_STATE_ROOT — profile namespacing', () => {
   it('no profile → legacy flat root (backward-compatible)', () => {
@@ -70,11 +70,7 @@ describe('STATE ROOT ISOLATION — cross-profile (regression)', () => {
           avgDurationMs: { max: 60000, weight: 0.5 },
         },
       })
-      await webStore.addBenchmark({
-        candidateId: c.id, version: 'v1', baseline: 'unknown', runs: 5,
-        metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 100 },
-        passed: true, details: 'web-v1', createdAt: isoDateTime(new Date()), mode: 'live',
-      })
+      await seedLiveBenchmark(webStore, c.id, 'v1', 'unknown', { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 100 }, { passed: true, details: 'web-v1', runs: 5 })
       await webStore.createVersion({ label: 'v1', reason: 'web-release', promotedFrom: 'v0', modules: [c.id] })
 
       // evo-live sees NONE of the web state

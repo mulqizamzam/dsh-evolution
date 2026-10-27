@@ -16,8 +16,7 @@ import { tmpdir } from 'node:os'
 import { access } from 'node:fs/promises'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
-import { isoDateTime } from '../src/lib/ids.ts'
-import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 import type { ModuleDeps, HostContextShape } from '../src/host/types.ts'
 import { runPromotionPolicy } from '../src/host/modules/promote/index.ts'
 
@@ -38,32 +37,21 @@ async function runBenchmark(
   successRate: number,
   mode: 'live' | 'simulated' = 'live',
 ) {
-  const createdAt = isoDateTime(new Date())
-  const command = 'node candidate-under-test.js'
   const candidate = await store.getCandidate(candidateId)
   if (!candidate) throw new Error('candidate fixture missing')
   const version = candidate.parentVersion
-  await store.addBenchmark({
-    candidateId,
-    version,
-    baseline: 'unknown',
-    runs: 10,
-    metrics: {
-      successRate,
-      avgScore: successRate,
-      errorRate: 0,
-      avgSteps: 0,
-      avgDurationMs: 100,
-    },
+  await seedLiveBenchmark(store, candidateId, version, 'unknown', {
+    successRate,
+    avgScore: successRate,
+    errorRate: 0,
+    avgSteps: 0,
+    avgDurationMs: 100,
+  }, {
     passed: successRate >= 0.8,
     details: `benchmark rate=${successRate}`,
-    createdAt,
     mode,
-    ...(mode === 'live' ? {
-      command,
-      provenance: createLiveProvenance(candidateId, version, command, createdAt),
-    } : {}),
-  }, createdAt)
+    runs: 10,
+  })
   await store.updateCandidate(candidateId, { status: 'benchmarked' })
 }
 

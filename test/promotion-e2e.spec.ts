@@ -3,8 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
-import { isoDateTime } from '../src/lib/ids.ts'
-import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 
 describe('E2E: realistic promotion safety experiment', () => {
   it('worse candidate (0.86) rejected when active is 0.95, better candidate (0.98) accepted, tie (0.95) rejected', async () => {
@@ -21,16 +20,7 @@ describe('E2E: realistic promotion safety experiment', () => {
         tests: [],
         benchmarkConfig: { successRate:{min:0.8,weight:1}, avgScore:{min:0.7,weight:1}, errorRate:{max:0.2,weight:1}, avgSteps:{max:50,weight:0.5}, avgDurationMs:{max:60000,weight:0.5} },
       })
-      {
-        const createdAt = isoDateTime(new Date(Date.now() - 86400000))
-        const command = 'node candidate-under-test.js'
-        await store.addBenchmark({
-          candidateId: v1.id, version: 'v0', baseline: 'unknown', runs: 20,
-          metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 200 },
-          passed: true, details: 'v1', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v1.id, 'v0', command, createdAt),
-        }, createdAt)
-      }
+      await seedLiveBenchmark(store, v1.id, 'v0', 'unknown', { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 200 }, { passed: true, details: 'v1', runs: 20 })
       await store.createVersion({ label: 'v1-good', reason: 'release', promotedFrom: 'v0', modules: [v1.id] })
 
       // v2: regressed to 0.86 — should be REJECTED
@@ -41,16 +31,7 @@ describe('E2E: realistic promotion safety experiment', () => {
         tests: [],
         benchmarkConfig: { successRate:{min:0.8,weight:1}, avgScore:{min:0.7,weight:1}, errorRate:{max:0.2,weight:1}, avgSteps:{max:50,weight:0.5}, avgDurationMs:{max:60000,weight:0.5} },
       })
-      {
-        const createdAt = isoDateTime(new Date())
-        const command = 'node candidate-under-test.js'
-        await store.addBenchmark({
-          candidateId: v2.id, version: 'v1', baseline: 'unknown', runs: 20,
-          metrics: { successRate: 0.86, avgScore: 0.86, errorRate: 0.08, avgSteps: 5, avgDurationMs: 210 },
-          passed: true, details: 'v2', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v2.id, 'v1', command, createdAt),
-        }, createdAt)
-      }
+      await seedLiveBenchmark(store, v2.id, 'v1', 'unknown', { successRate: 0.86, avgScore: 0.86, errorRate: 0.08, avgSteps: 5, avgDurationMs: 210 }, { passed: true, details: 'v2', runs: 20 })
 
       // v3: improved to 0.98 — should be ACCEPTED
       const v3 = await store.addCandidate({
@@ -60,16 +41,7 @@ describe('E2E: realistic promotion safety experiment', () => {
         tests: [],
         benchmarkConfig: { successRate:{min:0.8,weight:1}, avgScore:{min:0.7,weight:1}, errorRate:{max:0.2,weight:1}, avgSteps:{max:50,weight:0.5}, avgDurationMs:{max:60000,weight:0.5} },
       })
-      {
-        const createdAt = isoDateTime(new Date())
-        const command = 'node candidate-under-test.js'
-        await store.addBenchmark({
-          candidateId: v3.id, version: 'v2', baseline: 'unknown', runs: 20,
-          metrics: { successRate: 0.98, avgScore: 0.98, errorRate: 0.01, avgSteps: 4, avgDurationMs: 190 },
-          passed: true, details: 'v3', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v3.id, 'v2', command, createdAt),
-        }, createdAt)
-      }
+      await seedLiveBenchmark(store, v3.id, 'v2', 'unknown', { successRate: 0.98, avgScore: 0.98, errorRate: 0.01, avgSteps: 4, avgDurationMs: 190 }, { passed: true, details: 'v3', runs: 20 })
 
       // v4: tie at 0.95 — should be REJECTED
       const v4 = await store.addCandidate({
@@ -79,16 +51,7 @@ describe('E2E: realistic promotion safety experiment', () => {
         tests: [],
         benchmarkConfig: { successRate:{min:0.8,weight:1}, avgScore:{min:0.7,weight:1}, errorRate:{max:0.2,weight:1}, avgSteps:{max:50,weight:0.5}, avgDurationMs:{max:60000,weight:0.5} },
       })
-      {
-        const createdAt = isoDateTime(new Date())
-        const command = 'node candidate-under-test.js'
-        await store.addBenchmark({
-          candidateId: v4.id, version: 'v3', baseline: 'unknown', runs: 20,
-          metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 200 },
-          passed: true, details: 'v4', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v4.id, 'v3', command, createdAt),
-        }, createdAt)
-      }
+      await seedLiveBenchmark(store, v4.id, 'v3', 'unknown', { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 200 }, { passed: true, details: 'v4', runs: 20 })
 
       const deps = {
         ctx: { tools:{register:()=>{}}, settings:{writable:true,register:()=>({get:()=>({})})}, agents:{get:()=>undefined,roots:()=>[]}, get:()=>undefined, on:()=>()=>{}, effect:()=>()=>{} },

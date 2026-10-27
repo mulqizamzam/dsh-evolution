@@ -342,12 +342,13 @@ describe('Phase 7: Evidence-based promotion', () => {
       benchmarkConfig: { successRate: { min: 0.8, weight: 1 }, avgScore: { min: 0.7, weight: 1 }, errorRate: { max: 0.2, weight: 1 }, avgSteps: { max: 50, weight: 0.5 }, avgDurationMs: { max: 60000, weight: 0.5 } },
       status: 'draft',
     })
+    const simCreatedAt = new Date().toISOString()
     await store.addBenchmark({
       mode: 'simulated',
       candidateId: candidate.id, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 5,
       metrics: { successRate: 0.95, avgScore: 0.9, errorRate: 0.02, avgSteps: 3, avgDurationMs: 5000 },
       passed: true, details: 'simulated only',
-    })
+    }, simCreatedAt)
 
     const { promoteTools: pt } = await import('../src/host/modules/promote/tools.ts')
     const decision = pt(deps).find(t => t.name === 'evo_promote_decision')!

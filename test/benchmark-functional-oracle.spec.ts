@@ -655,6 +655,7 @@ describe('persistence: functional evidence survives serialization', async () => 
         },
       })
       // Directly write a benchmark record with expectedOutput and re-read it
+      const benchCreatedAt = new Date().toISOString()
       const recordId = await store.addBenchmark({
         mode: 'live',
         candidateId: id,
@@ -673,7 +674,8 @@ describe('persistence: functional evidence survives serialization', async () => 
         expectedOutput: 'survives-roundtrip',
         passed: true,
         details: 'test persistence',
-      })
+        provenance: require('../src/lib/provenance.ts').createLiveProvenance(id, 'v1', 'echo survives-roundtrip', benchCreatedAt),
+      }, benchCreatedAt)
       const stored = await store.listBenchmarks()
       expect(stored.length).toBe(1)
       const rec = stored[0]

@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
 import { createLiveProvenance } from '../src/lib/provenance.ts'
 import type { ModuleDeps, HostLlmGenerateOptions, HostLlmStreamChunk } from '../src/host/types.ts'
@@ -228,13 +229,7 @@ describe('AUTONOMOUS EVOLUTION EXPERIMENT', () => {
     expect(passCount).toBe(0)
 
     // v1 fails the trusted oracle deterministically
-    await store.addBenchmark({
-      candidateId: v1id, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 0, avgScore: 0, errorRate: 0, avgSteps: 1, avgDurationMs: 200 },
-      passed: false,
-      details: 'v1 live: 0/3 runs passed',
-      mode: 'live', expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE,
-    })
+    await seedLiveBenchmark(store, v1id, 'v1', 'v1', { successRate: 0, avgScore: 0, errorRate: 0, avgSteps: 1, avgDurationMs: 200 }, { passed: false, details: 'v1 live: 0/3 runs passed' })
     await store.updateCandidate(v1id, { status: 'benchmarked' })
   })
 
@@ -347,12 +342,7 @@ describe('AUTONOMOUS EVOLUTION EXPERIMENT', () => {
     expect(passCount).toBe(3)
     expect(sampleStdout).toBe(EXPECTED_OUTPUT)
 
-    await store.addBenchmark({
-      candidateId: genResult.candidateId, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 200 },
-      passed: true, details: 'autonomous AGNES: 3/3 runs passed',
-      mode: 'live', expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE,
-    })
+    await seedLiveBenchmark(store, genResult.candidateId, 'v1', 'v1', { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 200 }, { passed: true, details: 'autonomous AGNES: 3/3 runs passed' })
     await store.updateCandidate(genResult.candidateId, { status: 'benchmarked' })
   })
 
@@ -627,12 +617,7 @@ describe('AUTONOMOUS EVOLUTION EXPERIMENT', () => {
       expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE,
       timeoutMs: 30_000,
     } as never, exec)
-    await store.addBenchmark({
-      candidateId: v1id, version: 'v1', baseline: 'v1', runs: 1,
-      metrics: { successRate: 0, avgScore: 0, errorRate: 0, avgSteps: 1, avgDurationMs: 200 },
-      passed: false, details: 'v1 failed', mode: 'live',
-      expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE,
-    })
+    await seedLiveBenchmark(store, v1id, 'v1', 'v1', { successRate: 0, avgScore: 0, errorRate: 0, avgSteps: 1, avgDurationMs: 200 }, { passed: false, details: 'v1 failed' })
     await store.updateCandidate(v1id, { status: 'benchmarked' })
 
     // Make v1 active

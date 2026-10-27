@@ -114,11 +114,12 @@ async function addSimBenchmark(
 ): Promise<BenchmarkRun> {
   const candidate = await store.getCandidate(candidateId)
   if (!candidate) throw new Error('candidate fixture missing')
+  const simCreatedAt = new Date().toISOString()
   return store.addBenchmark({
     candidateId, version: candidate.parentVersion, baseline: candidate.parentVersion, parentVersion: candidate.parentVersion, runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 100 },
     passed: successRate >= 0.8, details: 'simulated', mode: 'simulated',
-  })
+  }, simCreatedAt)
 }
 
 async function addLiveBenchmark(

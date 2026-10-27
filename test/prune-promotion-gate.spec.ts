@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
-import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 import type { ModuleDeps, HostContextShape } from '../src/host/types.ts'
 import { evaluatePromotionPolicy } from '../src/host/modules/promote/index.ts'
 
@@ -64,11 +64,7 @@ describe('Promotion gate ordering — evaluate before mutation', () => {
         files: [], tests: [],
         benchmarkConfig: { successRate:{min:0.8,weight:1}, avgScore:{min:0.7,weight:1}, errorRate:{max:0.2,weight:1}, avgSteps:{max:50,weight:0.5}, avgDurationMs:{max:60000,weight:0.5} },
       })
-      await store.addBenchmark({
-        candidateId: v1.id, version: 'v1', baseline: 'unknown', runs: 20,
-        metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 200 },
-        passed: true, details: 'v1', createdAt: isoDateTime(new Date()), mode: 'live',
-      })
+      await seedLiveBenchmark(store, v1.id, 'v1', 'unknown', { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 200 }, { passed: true, details: 'v1', runs: 20 })
       await store.createVersion({ label: 'v1', reason: 'release', modules: [v1.id] })
 
       // Candidate v2 at 0.86 — worse than active
@@ -78,16 +74,7 @@ describe('Promotion gate ordering — evaluate before mutation', () => {
         files: [], tests: [],
         benchmarkConfig: { successRate:{min:0.8,weight:1}, avgScore:{min:0.7,weight:1}, errorRate:{max:0.2,weight:1}, avgSteps:{max:50,weight:0.5}, avgDurationMs:{max:60000,weight:0.5} },
       })
-      {
-        const createdAt = isoDateTime(new Date())
-        const command = 'node candidate-under-test.js'
-        await store.addBenchmark({
-          candidateId: v2.id, version: 'v1', baseline: 'unknown', runs: 20,
-          metrics: { successRate: 0.86, avgScore: 0.86, errorRate: 0.08, avgSteps: 5, avgDurationMs: 210 },
-          passed: true, details: 'v2', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v2.id, 'v1', command, createdAt),
-        }, createdAt)
-      }
+      await seedLiveBenchmark(store, v2.id, 'v1', 'unknown', { successRate: 0.86, avgScore: 0.86, errorRate: 0.08, avgSteps: 5, avgDurationMs: 210 }, { passed: true, details: 'v2', runs: 20 })
 
       const deps: ModuleDeps = { ctx: makeCtx(), cfg: () => resolveConfig({ stateRoot: tmpRoot }), store, log: () => {}, warn: () => {} }
 
@@ -130,11 +117,7 @@ describe('Promotion gate ordering — evaluate before mutation', () => {
         files: [], tests: [],
         benchmarkConfig: { successRate:{min:0.8,weight:1}, avgScore:{min:0.7,weight:1}, errorRate:{max:0.2,weight:1}, avgSteps:{max:50,weight:0.5}, avgDurationMs:{max:60000,weight:0.5} },
       })
-      await store.addBenchmark({
-        candidateId: v1.id, version: 'v1', baseline: 'unknown', runs: 20,
-        metrics: { successRate: 0.90, avgScore: 0.90, errorRate: 0.03, avgSteps: 5, avgDurationMs: 200 },
-        passed: true, details: 'v1', createdAt: isoDateTime(new Date()), mode: 'live',
-      })
+      await seedLiveBenchmark(store, v1.id, 'v1', 'unknown', { successRate: 0.90, avgScore: 0.90, errorRate: 0.03, avgSteps: 5, avgDurationMs: 200 }, { passed: true, details: 'v1', runs: 20 })
       await store.createVersion({ label: 'v1', reason: 'release', modules: [v1.id] })
 
       const v2 = await store.addCandidate({
@@ -143,16 +126,7 @@ describe('Promotion gate ordering — evaluate before mutation', () => {
         files: [{ path: 'src/index.ts', content: 'export function f() { return 42; }\n' }], tests: [],
         benchmarkConfig: { successRate:{min:0.8,weight:1}, avgScore:{min:0.7,weight:1}, errorRate:{max:0.2,weight:1}, avgSteps:{max:50,weight:0.5}, avgDurationMs:{max:60000,weight:0.5} },
       })
-      {
-        const createdAt = isoDateTime(new Date())
-        const command = 'node candidate-under-test.js'
-        await store.addBenchmark({
-          candidateId: v2.id, version: 'v1', baseline: 'unknown', runs: 20,
-          metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0.01, avgSteps: 4, avgDurationMs: 190 },
-          passed: true, details: 'v2', createdAt, mode: 'live', command,
-          provenance: createLiveProvenance(v2.id, 'v1', command, createdAt),
-        }, createdAt)
-      }
+      await seedLiveBenchmark(store, v2.id, 'v1', 'unknown', { successRate: 0.96, avgScore: 0.96, errorRate: 0.01, avgSteps: 4, avgDurationMs: 190 }, { passed: true, details: 'v2', runs: 20 })
 
       const deps: ModuleDeps = { ctx: makeCtx(), cfg: () => resolveConfig({ stateRoot: tmpRoot }), store, log: () => {}, warn: () => {} }
 

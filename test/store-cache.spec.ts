@@ -87,11 +87,13 @@ describe('EvolutionStore cache', () => {
       benchmarkConfig: { successRate: { min: 0.5, weight: 1 }, avgScore: { min: 0.5, weight: 1 }, errorRate: { max: 0.5, weight: 1 }, avgSteps: { max: 100, weight: 1 }, avgDurationMs: { max: 60000, weight: 1 } },
       status: 'draft',
     })
-    const b1 = await store.addBenchmark({ candidateId: c.id, version: 'v1', baseline: 'v1', runs: 1, metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, passed: true, details: 'ok' })
+    const b1CreatedAt = new Date().toISOString()
+    const b1 = await store.addBenchmark({ candidateId: c.id, version: 'v1', baseline: 'v1', runs: 1, metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, passed: true, details: 'ok' }, b1CreatedAt)
     const first = await store.listBenchmarks(10)
     expect(first).toHaveLength(1)
 
-    const b2 = await store.addBenchmark({ candidateId: c.id, version: 'v1', baseline: 'v1', runs: 1, metrics: { successRate: 0.8, avgScore: 0.8, errorRate: 0.1, avgSteps: 10, avgDurationMs: 200 }, passed: true, details: 'ok2' })
+        const b2CreatedAt = new Date().toISOString()
+    const b2 = await store.addBenchmark({ candidateId: c.id, version: 'v1', baseline: 'v1', runs: 1, metrics: { successRate: 0.8, avgScore: 0.8, errorRate: 0.1, avgSteps: 10, avgDurationMs: 200 }, passed: true, details: 'ok2' }, b2CreatedAt)
     const second = await store.listBenchmarks(10)
     expect(second).toHaveLength(2)
     expect(second).not.toBe(first)

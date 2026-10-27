@@ -28,7 +28,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore, ACTIVE_VERSION_POINTER, ActivePointer } from '../src/host/store.ts'
 import { writeJsonAtomic, readJsonSafe } from '../src/lib/fsx.ts'
-import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
 import type { Version } from '../src/host/types.ts'
 
@@ -52,21 +52,7 @@ async function seedCandidate(store: EvolutionStore, name: string, parentVersion 
 }
 
 async function addLiveBench(store: EvolutionStore, candidateId: string, successRate: number, command = 'node test.js') {
-  const createdAt = isoDateTime(new Date())
-  const bench = await store.addBenchmark({
-    mode: 'live',
-    candidateId,
-    version: 'v-temp',
-    baseline: 'v-temp',
-    runs: 3,
-    metrics: { successRate, avgScore: successRate, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-    passed: true,
-    details: 'live',
-    command,
-    provenance: createLiveProvenance(candidateId, 'v-temp', command, createdAt),
-  })
-  await store.updateCandidate(candidateId, { status: 'benchmarked' })
-  return bench
+  return seedLiveBenchmark(store, candidateId, 'v-temp', 'v-temp', { successRate, avgScore: successRate, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { command, details: 'live' })
 }
 
 function readPointer(root: string): Promise<ActivePointer | null> {

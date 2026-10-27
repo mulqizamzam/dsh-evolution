@@ -23,6 +23,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore, ACTIVE_VERSION_POINTER } from '../src/host/store.ts'
 import { writeJsonAtomic, readJsonSafe } from '../src/lib/fsx.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 
 async function readPointer(root: string): Promise<{ versionId: string } | null> {
   try {
@@ -63,11 +64,7 @@ describe('Mission 2.2 — Canonical active-state hardening (P1–P14)', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
-      mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'live', createdAt: new Date().toISOString(),
-    })
+    await seedLiveBenchmark(store, candidate.id, 'v1', 'v1', { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'live' })
     await store.updateCandidate(candidate.id, { status: 'benchmarked' })
 
     const result = await store.createVersion({ label: 'p1-promo', modules: [candidate.id] })
@@ -102,11 +99,7 @@ describe('Mission 2.2 — Canonical active-state hardening (P1–P14)', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
-      mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'live', createdAt: new Date().toISOString(),
-    })
+    await seedLiveBenchmark(store, candidate.id, 'v1', 'v1', { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'live' })
     await store.updateCandidate(candidate.id, { status: 'benchmarked' })
 
     await store.createVersion({ label: 'p2-promo', modules: [candidate.id] })
@@ -143,11 +136,7 @@ describe('Mission 2.2 — Canonical active-state hardening (P1–P14)', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
-      mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'live', createdAt: new Date().toISOString(),
-    })
+    await seedLiveBenchmark(store, candidate.id, 'v1', 'v1', { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'live' })
     await store.updateCandidate(candidate.id, { status: 'benchmarked' })
 
     // After promotion
@@ -222,11 +211,7 @@ describe('Mission 2.2 — Canonical active-state hardening (P1–P14)', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
-      mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'live', createdAt: new Date().toISOString(),
-    })
+    await seedLiveBenchmark(store, candidate.id, 'v1', 'v1', { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'live' })
     await store.updateCandidate(candidate.id, { status: 'benchmarked' })
     await store.createVersion({ label: 'p6-promo', modules: [candidate.id] })
 
@@ -321,11 +306,7 @@ describe('Mission 2.2 — Canonical active-state hardening (P1–P14)', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
-      mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'live', createdAt: new Date().toISOString(),
-    })
+    await seedLiveBenchmark(store, candidate.id, 'v1', 'v1', { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'live' })
     await store.updateCandidate(candidate.id, { status: 'benchmarked' })
     await store.createVersion({ label: 'p9-promo', modules: [candidate.id] })
 
@@ -397,11 +378,7 @@ describe('Mission 2.2 — Canonical active-state hardening (P1–P14)', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
-      mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'live', createdAt: new Date().toISOString(),
-    })
+    await seedLiveBenchmark(store, candidate.id, 'v1', 'v1', { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'live' })
     await store.updateCandidate(candidate.id, { status: 'benchmarked' })
 
     const v2 = await store.createVersion({ label: 'p11-promo', modules: [candidate.id] })
@@ -435,11 +412,7 @@ describe('Mission 2.2 — Canonical active-state hardening (P1–P14)', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
-      mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
-      metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'live', createdAt: new Date().toISOString(),
-    })
+    await seedLiveBenchmark(store, candidate.id, 'v1', 'v1', { successRate: 0.96, avgScore: 0.96, errorRate: 0, avgSteps: 0, avgDurationMs: 100 }, { details: 'live' })
     await store.updateCandidate(candidate.id, { status: 'benchmarked' })
 
     const v2 = await store.createVersion({ label: 'p12-promo', modules: [candidate.id] })

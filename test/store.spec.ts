@@ -143,6 +143,7 @@ describe('EvolutionStore', () => {
 
   describe('Benchmark', () => {
     it('adds and lists benchmarks', async () => {
+      const benchCreatedAt = new Date().toISOString()
       const run = await store.addBenchmark({
         candidateId: 'c1',
         version: 'v1',
@@ -151,7 +152,7 @@ describe('EvolutionStore', () => {
         metrics: { successRate: 0.9, avgScore: 0.8, errorRate: 0.05, avgSteps: 5, avgDurationMs: 20000 },
         passed: true,
         details: 'all metrics improved',
-      })
+      }, benchCreatedAt)
       expect(run.id).toBeDefined()
 
       const list = await store.listBenchmarks()

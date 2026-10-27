@@ -10,7 +10,7 @@ import { mkdtemp, rm, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
-import { isoDateTime } from '../src/lib/ids.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 
 async function makeStore(root: string): Promise<EvolutionStore> {
   const s = new EvolutionStore({ fallbackRoot: root })
@@ -127,11 +127,7 @@ describe('STATE ROOT ISOLATION — cross-profile contamination', () => {
         files: [{ path: 'src/index.ts', content: 'x=1\n' }], tests: [],
         benchmarkConfig: benchmarkConfig(),
       })
-      await testStore.addBenchmark({
-        candidateId: c.id, version: 'v1', baseline: 'unknown', runs: 5,
-        metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 100 },
-        passed: true, details: 'v1', createdAt: isoDateTime(new Date()), mode: 'live',
-      })
+      await seedLiveBenchmark(testStore, c.id, 'v1', 'unknown', { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 100 }, { passed: true, details: 'v1', runs: 5 })
       await testStore.createVersion({ label: 'v1', reason: 'test-release', promotedFrom: 'v0', modules: [c.id] })
 
       const liveActive = await liveStore.getActiveVersion()
@@ -157,11 +153,7 @@ describe('STATE ROOT ISOLATION — cross-profile contamination', () => {
         files: [{ path: 'src/index.ts', content: 'x=1\n' }], tests: [],
         benchmarkConfig: benchmarkConfig(),
       })
-      await liveStore.addBenchmark({
-        candidateId: c.id, version: 'v1', baseline: 'unknown', runs: 5,
-        metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 100 },
-        passed: true, details: 'v1', createdAt: isoDateTime(new Date()), mode: 'live',
-      })
+      await seedLiveBenchmark(liveStore, c.id, 'v1', 'unknown', { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 100 }, { passed: true, details: 'v1', runs: 5 })
       await liveStore.createVersion({ label: 'v1', reason: 'live-release', promotedFrom: 'v0', modules: [c.id] })
 
       const testActive = await testStore.getActiveVersion()
@@ -189,11 +181,7 @@ describe('STATE ROOT ISOLATION — cross-profile contamination', () => {
       })
 
       // TEST writes a benchmark for the same candidate ID (cross-profile leak)
-      await testStore.addBenchmark({
-        candidateId: c.id, version: 'v1', baseline: 'unknown', runs: 5,
-        metrics: { successRate: 1.0, avgScore: 1.0, errorRate: 0, avgSteps: 5, avgDurationMs: 100 },
-        passed: true, details: 'cross-profile', createdAt: isoDateTime(new Date()), mode: 'live',
-      })
+      await seedLiveBenchmark(testStore, c.id, 'v1', 'unknown', { successRate: 1.0, avgScore: 1.0, errorRate: 0, avgSteps: 5, avgDurationMs: 100 }, { passed: true, details: 'cross-profile', runs: 5 })
 
       // LIVE should not see the TEST benchmark
       const liveBenches = await liveStore.listBenchmarks(100)

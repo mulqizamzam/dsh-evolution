@@ -11,8 +11,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
-import { isoDateTime } from '../src/lib/ids.ts'
-import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { seedLiveBenchmark } from './helpers/seed-live-benchmark.ts'
 import type { ModuleDeps, HostContextShape } from '../src/host/types.ts'
 
 function makeCtx(): HostContextShape {
@@ -29,30 +28,20 @@ function makeCtx(): HostContextShape {
 async function runBenchmark(store: EvolutionStore, candidateId: string, successRate: number) {
   const totalRuns = 10
   const successCount = Math.round(totalRuns * successRate)
-  const createdAt = isoDateTime(new Date())
-  const command = 'node candidate-under-test.js'
   const candidate = await store.getCandidate(candidateId)
   if (!candidate) throw new Error('candidate fixture missing')
   const version = candidate.parentVersion
-  await store.addBenchmark({
-    candidateId,
-    version,
-    baseline: 'unknown',
-    runs: totalRuns,
-    metrics: {
-      successRate,
-      avgScore: successCount / totalRuns,
-      errorRate: 0,
-      avgSteps: 0,
-      avgDurationMs: 100,
-    },
+  await seedLiveBenchmark(store, candidateId, version, 'unknown', {
+    successRate,
+    avgScore: successCount / totalRuns,
+    errorRate: 0,
+    avgSteps: 0,
+    avgDurationMs: 100,
+  }, {
     passed: successRate >= 0.8,
     details: `live benchmark rate=${successRate}`,
-    createdAt,
-    mode: 'live',
-    command,
-    provenance: createLiveProvenance(candidateId, version, command, createdAt),
-  }, createdAt)
+    runs: totalRuns,
+  })
   // Mark candidate as benchmarked (evo_promote requires this status)
   await store.updateCandidate(candidateId, { status: 'benchmarked' })
 }
