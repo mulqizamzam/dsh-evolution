@@ -464,9 +464,9 @@ describe('Full lifecycle: experience -> analyze -> candidate -> sandbox -> bench
 
     // 9. Rollback to the original baseline v1
     const rollback = promoteTools(deps).find(t => t.name === 'evo_rollback')!
-    const rolled = await rollback.execute({ versionId: 'v1' } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; restored: { id: string } }
+    const rolled = await rollback.execute({ versionId: 'v1' } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; restored: string }
     expect(rolled.ok).toBe(true)
-    expect(rolled.restored.id).toBe('v1')
+    expect(rolled.restored).toBe('v1')
 
     // Verify final state: v1 active, promoted version rolled-back
     const v1Final = await store.getVersion('v1')
