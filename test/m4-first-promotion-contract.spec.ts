@@ -112,8 +112,10 @@ async function addCandidate(
 async function addSimBenchmark(
   store: EvolutionStore, candidateId: string, successRate: number,
 ): Promise<BenchmarkRun> {
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
   return store.addBenchmark({
-    candidateId, version: 'v-temp', baseline: 'unknown', runs: 5,
+    candidateId, version: candidate.parentVersion, baseline: candidate.parentVersion, parentVersion: candidate.parentVersion, runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 100 },
     passed: successRate >= 0.8, details: 'simulated', mode: 'simulated',
   })
@@ -123,11 +125,14 @@ async function addLiveBenchmark(
   store: EvolutionStore, candidateId: string, successRate: number, command = 'node test.js',
 ): Promise<BenchmarkRun> {
   const createdAt = isoDateTime(new Date())
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
+  const version = candidate.parentVersion
   return store.addBenchmark({
-    candidateId, version: 'v-temp', baseline: 'unknown', runs: 5,
+    candidateId, version, baseline: version, parentVersion: version, runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 200 },
     passed: successRate >= 0.8, details: 'live sandbox execution: exit 0',
-    mode: 'live', command, provenance: createLiveProvenance(candidateId, 'v-temp', command, createdAt),
+    mode: 'live', command, provenance: createLiveProvenance(candidateId, version, command, createdAt),
   }, createdAt)
 }
 
@@ -179,19 +184,20 @@ describe('M4 — first promotion: supported evidence modes (policy level)', () =
     })
   })
 
-  it('M4-1c: no active version + NO benchmark at all → policy allows promotion (characterized residual)', async () => {
-    // C-1 does NOT decide this case: it speaks only to records whose mode is
-    // the literal string 'simulated'. evaluatePromotionPolicy has no
-    // evidence-existence check of its own (both gate guards require
-    // candidateLatest to be truthy); the evo_promote tool layer does have one.
-    // Pinned here as a recorded residual, not endorsed as intended policy.
+  it('M4-1c: no active version + NO benchmark at all → Red Team gate is INCONCLUSIVE (C-3)', async () => {
+    // C-3 supersedes the earlier residual: missing evidence must never be
+    // interpreted as promotion eligibility. The shared policy blocks it.
     await withStore(async (store, root) => {
       const v1Id = await addCandidate(store, 'v1', 'v0')
       expect(await store.listBenchmarks(500)).toHaveLength(0)
 
       const result = await evaluatePromotionPolicy(makeDeps(store, root), await store.getCandidate(v1Id)!)
 
-      expect(result.ok).toBe(true)
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.redTeamGate.verdict).toBe('INCONCLUSIVE')
+        expect(result.error).toMatch(/red-team promotion gate INCONCLUSIVE/)
+      }
     })
   })
 
@@ -230,7 +236,7 @@ describe('M4 — first promotion: the manual tool applies a stricter gate', () =
       const result = await tool.execute({ candidateId: v1Id } as never, { signal: AbortSignal.timeout(10_000) }) as { ok: boolean; error?: string }
 
       expect(result.ok).toBe(false)
-      expect(result.error).toMatch(/no live benchmark|simulated evidence cannot promote/)
+      expect(result.error).toMatch(/red-team promotion gate FAIL|simulated evidence is not promotion-eligible|simulated evidence/i)
     })
   })
 
@@ -246,7 +252,7 @@ describe('M4 — first promotion: the manual tool applies a stricter gate', () =
       const result = await tool.execute({ candidateId: v1Id } as never, { signal: AbortSignal.timeout(20_000) }) as { ok: boolean; error?: string }
 
       // Whatever happens downstream, the evidence gate must not be what blocked it.
-      expect(result.error ?? '').not.toMatch(/no live benchmark|simulated evidence cannot promote/)
+      expect(result.error ?? '').not.toMatch(/red-team promotion gate FAIL|simulated evidence is not promotion-eligible|simulated evidence/i)
     })
   })
 })
@@ -474,7 +480,7 @@ describe('C-1 — first-promotion evidence contract', () => {
       expect(viaPolicy.ok).toBe(false)
       if (!viaPolicy.ok) expect(viaPolicy.error).toMatch(/simulated evidence/)
       expect(viaTool.ok).toBe(false)
-      expect(viaTool.error).toMatch(/no live benchmark|simulated evidence cannot promote/)
+      expect(viaTool.error).toMatch(/red-team promotion gate FAIL|simulated evidence is not promotion-eligible|simulated evidence/i)
 
       // Neither path may leave partial state behind.
       expect(await store.listVersions(200)).toHaveLength(0)

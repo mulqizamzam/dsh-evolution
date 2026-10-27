@@ -154,14 +154,16 @@ describe('Runtime smoke test', () => {
     expect(liveResult.executionResult.stdout).toContain('LIVE-PASS')
     expect(liveResult.executionResult.exitCode).toBe(0)
 
+    const createdAt = isoDateTime(new Date())
+    const command = 'echo "LIVE-PASS"'
     await store.addBenchmark({
-      candidateId, version: 'v1', baseline: 'v1', runs: 3,
+      candidateId, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 3,
       metrics: { successRate: 0.95, avgScore: 0.9, errorRate: 0.05, avgSteps: 4, avgDurationMs: 8000 },
       passed: true, details: 'All thresholds met.',
       mode: 'live',
-      command: 'echo "LIVE-PASS"',
-      provenance: createLiveProvenance(candidateId, 'v1', 'echo "LIVE-PASS"', isoDateTime(new Date())),
-    })
+      command,
+      provenance: createLiveProvenance(candidateId, 'v1', command, createdAt),
+    }, createdAt)
     await store.updateCandidate(candidateId, { status: 'benchmarked' })
 
     const { promoteTools } = await import('../src/host/modules/promote/tools.ts')

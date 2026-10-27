@@ -115,12 +115,33 @@ export interface BenchmarkRun {
    * field was introduced.
    */
   provenance?: string
+  /** Integrity digest binding all stored benchmark fields, including metrics and outcomes. */
+  attestation?: string
   /** Baseline side metrics for an A/B run. */
   baselineMetrics?: BenchmarkMetrics
   /** Comparative deltas for an A/B run. */
   comparison?: BenchmarkComparison
   /** Per-case execution results for an A/B run. */
   caseResults?: BenchmarkExecutionResult[]
+}
+
+export type RedTeamGateVerdict = 'PASS' | 'FAIL' | 'INCONCLUSIVE'
+
+export interface PromotionGateCheck {
+  id: string
+  verdict: RedTeamGateVerdict
+  detail: string
+}
+
+/** Durable audit record for a candidate promotion gate evaluation. */
+export interface PromotionGateRun {
+  id: string
+  candidateId: string
+  benchmarkRunId?: string
+  checkedAt: string
+  verdict: RedTeamGateVerdict
+  blocked: boolean
+  checks: PromotionGateCheck[]
 }
 
 export interface BenchmarkMetrics {

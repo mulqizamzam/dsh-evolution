@@ -4,9 +4,10 @@ import { isSafeKey } from '../../../lib/ids.ts'
 import { createLiveProvenance, verifyLiveProvenance } from '../../../lib/provenance.ts'
 import type { ModuleDeps, Version, CandidateModule } from '../../types.ts'
 import { promoteTools } from './tools.ts'
+import { evaluateRedTeamPromotionGate, redTeamGateError, type RedTeamGateReport } from './red-team.ts'
 
 export const name = 'promote'
-export const TOOLS = ['evo_promote', 'evo_rollback', 'evo_promote_list', 'evo_promote_decision'] as const
+export const TOOLS = ['evo_promote', 'evo_rollback', 'evo_promote_list', 'evo_promote_decision', 'evo_red_team_gate_history'] as const
 export const readEndpoints = {}
 export const writeEndpoints = {}
 
@@ -15,16 +16,15 @@ export const writeEndpoints = {}
  * authority for every promotion path — `evo_promote` and `evo_full_cycle` both
  * route through here, so a rule enforced here is enforced everywhere.
  *
- * Two gates, in order:
+ * Three gates, in order:
  *
- *  1. **Evidence gate** — a candidate whose latest benchmark record has
- *     `mode === 'simulated'` is rejected unconditionally, including when no
- *     active version exists. Ratified as contract C-1 in `docs/CONTRACTS.md`.
- *  2. **Comparative gate (`beats_active`)** — the candidate's live metrics must
- *     strictly beat the active version's. Returns the captured active metrics
- *     (for provenance) on success, or `undefined` when the gate is skipped
- *     because there is no comparable active baseline (first version, or no
- *     benchmark on the active module). Tie with active = reject (monotonicity).
+ *  1. **Red Team integrity gate (C-3)** — only PASS can proceed. FAIL and
+ *     INCONCLUSIVE block promotion and carry an auditable report.
+ *  2. **Evidence gate (C-1)** — simulated evidence is always rejected, including
+ *     when no active version exists.
+ *  3. **Comparative gate (`beats_active`)** — live candidate metrics must
+ *     strictly beat the active version's when a comparable baseline exists.
+ *     Tie with active = reject (monotonicity).
  *
  * Returns { ok: false, error } when the candidate fails either gate.
  *
@@ -36,8 +36,20 @@ export const writeEndpoints = {}
 export async function evaluatePromotionPolicy(
   deps: ModuleDeps,
   candidate: CandidateModule,
-): Promise<{ ok: true; activeMetrics: import('../../types.ts').BenchmarkMetrics | undefined } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; activeMetrics: import('../../types.ts').BenchmarkMetrics | undefined; redTeamGate: RedTeamGateReport }
+  | { ok: false; error: string; redTeamGate: RedTeamGateReport }
+> {
   const store = deps.store
+  // Read the candidate evidence once and pass that exact snapshot to the gate,
+  // avoiding a second read between integrity validation and policy evaluation.
+  const candidateLatest = (await store.listBenchmarksByCandidate(candidate.id, true))[0]
+  // This is the shared fail-closed gate for manual and automatic promotion.
+  // INCONCLUSIVE is deliberately not promotable.
+  const redTeamGate = await evaluateRedTeamPromotionGate(deps, candidate, candidateLatest ?? null)
+  if (redTeamGate.verdict !== 'PASS') {
+    return { ok: false, error: redTeamGateError(redTeamGate), redTeamGate }
+  }
 
   // ── beats_active gate (comparative promotion safety) ──
   // Find the active version's latest live benchmark metrics to compare
@@ -59,8 +71,7 @@ export async function evaluatePromotionPolicy(
     }
   }
 
-  // Find the candidate's latest live benchmark metrics.
-  const candidateLatest = (await store.listBenchmarksByCandidate(candidate.id, true))[0]
+  // candidateLatest is the exact record snapshot that passed the Red Team gate.
 
   // Reject: candidate's most recent evidence is simulated.
   //
@@ -75,33 +86,18 @@ export async function evaluatePromotionPolicy(
     return {
       ok: false,
       error: `promotion rejected: candidate has only simulated evidence (mode=simulated); run evo_benchmark_live or evo_benchmark_ab to produce execution evidence before promoting`,
+      redTeamGate,
     }
   }
 
   if (capturedActiveMetrics && candidateLatest && candidateLatest.mode !== 'simulated') {
-    // Live records must carry a valid provenance seal when an active
-    // baseline exists.  This closes the unsealed-record forgery bypass
-    // (attacker flips mode='simulated'→'live' without adding a seal).
-    //
-    // Pre-seal records (no provenance field) from before M3.3 are tolerated
-    // only when the active baseline's own record is also unsealed — in that
-    // case neither side can be verified by seal and the gate falls back to
-    // the beats_active comparison.  This preserves backward compatibility
-    // for state roots created before the provenance mechanism was introduced.
-    if (candidateLatest.mode === 'live') {
-      const candidateSealed = candidateLatest.provenance !== undefined
-      const activeSealed = capturedActiveMetrics !== undefined && (activeModuleBenchRecord?.provenance ?? undefined) !== undefined
-
-      if (candidateSealed || activeSealed) {
-        // At least one side is sealed → the seal check applies.
-        if (!verifyLiveProvenance(candidateLatest)) {
-          return {
-            ok: false,
-            error: candidateLatest.provenance
-              ? 'provenance consistency mismatch: stored seal does not match the record fields; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence'
-              : 'live benchmark provenance seal missing: no provenance on record; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence',
-          }
-        }
+    // The Red Team gate has already required valid candidate provenance.
+    // Keep this defensive check adjacent to the comparative decision as well.
+    if (candidateLatest.mode === 'live' && !verifyLiveProvenance(candidateLatest)) {
+      return {
+        ok: false,
+        error: 'provenance consistency mismatch: stored seal does not match the record fields; re-run evo_benchmark_live or evo_benchmark_ab to generate valid evidence',
+        redTeamGate,
       }
     }
     const activeSuccessRate = capturedActiveMetrics.successRate
@@ -110,11 +106,12 @@ export async function evaluatePromotionPolicy(
       return {
         ok: false,
         error: `beats_active gate failed: candidate success rate ${(candidateSuccessRate * 100).toFixed(1)}% is not greater than active version ${(activeSuccessRate * 100).toFixed(1)}%`,
+        redTeamGate,
       }
     }
   }
 
-  return { ok: true, activeMetrics: capturedActiveMetrics }
+  return { ok: true, activeMetrics: capturedActiveMetrics, redTeamGate }
 }
 
 /**
@@ -139,6 +136,15 @@ export async function executePromotion(
   const { materializeArtifact, validateArtifact } = await import('../activation/artifact.ts')
   const { refreshActivation } = await import('../activation/loader.ts')
 
+  // Defence in depth: executePromotion is exported for reuse, so it must not
+  // be callable as a policy bypass even if a future caller forgets the wrapper.
+  const entryPolicy = await evaluatePromotionPolicy(deps, candidate)
+  if (!entryPolicy.ok) {
+    await refreshActivation(deps)
+    throw new Error('promotion blocked by Red Team/policy gate: ' + entryPolicy.error)
+  }
+  capturedActiveMetrics = entryPolicy.activeMetrics
+
   // ── Resolve the composition base BEFORE any store mutation ──
   // The candidate is promoted on top of the currently active version (A).
   // Reading the active version before createVersion guarantees A is the base
@@ -155,7 +161,8 @@ export async function executePromotion(
   // When plannedVersionId is non-empty AND matches what createVersion will
   // assign, the evo_promote pre-flight has already materialized the artifact
   // under that id.  In that case we only need to re-validate before proceeding.
-  const { access } = await import('node:fs/promises')
+  const { access, rm } = await import('node:fs/promises')
+  let materializedVersionId = plannedVersionId
   const manifestPath = join(store.getRoot(), 'versions', plannedVersionId, 'manifest.json')
   const artifactPreExists = plannedVersionId !== '' &&
     (await access(manifestPath).then(() => true).catch(() => false))
@@ -183,17 +190,29 @@ export async function executePromotion(
       status: 'active' as const,
       modules: [candidate.id],
     }
-    const { rm } = await import('node:fs/promises')
+    materializedVersionId = probeVersion.id
     await rm(join(store.getRoot(), 'versions', probeVersion.id), { recursive: true, force: true })
     await materializeArtifact(store.getRoot(), probeVersion, candidate, { baseVersionId })
     const validation = await validateArtifact(store.getRoot(), probeVersion.id)
     if (!validation.valid) {
       // Clean up the orphaned artifact directory so it does not leak disk space.
-      const { rm } = await import('node:fs/promises')
       await rm(join(store.getRoot(), 'versions', probeVersion.id), { recursive: true, force: true })
       throw new Error('version artifact did not validate: ' + validation.errors.join('; '))
     }
   }
+
+  // Re-evaluate immediately before persisted state mutation. This closes the
+  // pre-flight window in which benchmark evidence or the active baseline could
+  // have changed after the initial policy decision.
+  const finalPolicy = await evaluatePromotionPolicy(deps, candidate)
+  if (!finalPolicy.ok) {
+    await rm(join(store.getRoot(), 'versions', materializedVersionId), { recursive: true, force: true })
+    // activateVersion() may have mounted the candidate during preflight. Restore
+    // activation from the still-authoritative active pointer before returning.
+    await refreshActivation(deps)
+    throw new Error('promotion aborted by final Red Team/policy recheck: ' + finalPolicy.error)
+  }
+  capturedActiveMetrics = finalPolicy.activeMetrics
 
   // ── Now it is safe to mutate persisted state ──
   const version = await store.createVersion({
@@ -206,9 +225,8 @@ export async function executePromotion(
   await store.updateCandidate(candidate.id, { status: 'promoted' })
 
   // If the real version id differs from what was materialized, re-materialize
-  // under the correct id.  This is the fallback path for callers that passed
-  // an empty plannedVersionId (e.g. legacy runPromotionPolicy from evo_full_cycle).
-  const { rm } = await import('node:fs/promises')
+  // under the correct id. This is the fallback path for callers that passed an
+  // empty plannedVersionId (e.g. legacy runPromotionPolicy from evo_full_cycle).
   const expectedArtifactPath = join(store.getRoot(), 'versions', version.id)
   const artifactAtRealId = await access(join(expectedArtifactPath, 'manifest.json')).then(() => true).catch(() => false)
   if (!artifactAtRealId && version.id !== plannedVersionId) {
@@ -232,12 +250,15 @@ export async function runPromotionPolicy(
   candidate: CandidateModule,
   reason: string,
   plannedVersionId: string,
-): Promise<{ ok: true; version: Version } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; version: Version; redTeamGate: RedTeamGateReport }
+  | { ok: false; error: string; redTeamGate: RedTeamGateReport }
+> {
   const evaluation = await evaluatePromotionPolicy(deps, candidate)
   if (!evaluation.ok) return evaluation
 
   const { ok, version } = await executePromotion(deps, candidate, reason, plannedVersionId, evaluation.activeMetrics)
-  return { ok, version }
+  return { ok, version, redTeamGate: evaluation.redTeamGate }
 }
 
 export function apply(deps: ModuleDeps): void {

@@ -12,6 +12,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
+import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
 import type { HostContextShape } from '../src/host/dsh.ts'
 import { runAutoCycle, resetAutoGuards, autoGuardState, type AutoCycleOutcome } from '../src/host/modules/auto-experience/index.ts'
@@ -329,27 +331,35 @@ describe('P12: Degradation-driven evolution integration', () => {
       status: 'draft',
     })
 
-    // Add a failing benchmark
+    // A validly sealed live record with an explicit failed outcome. The
+    // integrity gate must reject this before advisory threshold recommendations.
+    const createdAt = isoDateTime(new Date())
+    const command = 'node candidate-under-test.js'
     await store.addBenchmark({
       candidateId: candidate.id,
       version: 'v2',
       baseline: 'v2',
+      parentVersion: 'v2',
       runs: 3,
       metrics: { successRate: 0.5, avgScore: 0.4, errorRate: 0.5, avgSteps: 25, avgDurationMs: 80000 },
       passed: false,
       details: 'Failed thresholds.',
-    })
+      mode: 'live',
+      command,
+      provenance: createLiveProvenance(candidate.id, 'v2', command, createdAt),
+    }, createdAt)
     await store.updateCandidate(candidate.id, { status: 'benchmarked' })
 
     // Promote decision should reject
     const { promoteTools } = await import('../src/host/modules/promote/tools.ts')
     const decision = promoteTools(deps).find(t => t.name === 'evo_promote_decision')!
     const verdict = await decision.execute({ candidateId: candidate.id, allowSimulated: true } as never, exec) as {
-      ok: boolean; recommendation: string; rejectionReasons: string[]
+      ok: boolean; recommendation: string; error?: string; redTeamGate?: { verdict: string }
     }
-    expect(verdict.ok).toBe(true)
+    expect(verdict.ok).toBe(false)
     expect(verdict.recommendation).toBe('REJECT')
-    expect(verdict.rejectionReasons.length).toBeGreaterThan(0)
+    expect(verdict.redTeamGate?.verdict).toBe('FAIL')
+    expect(verdict.error).toMatch(/red-team promotion gate FAIL/i)
 
     // Active version unchanged
     const active = await store.getActiveVersion()

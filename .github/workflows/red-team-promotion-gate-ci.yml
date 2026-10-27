@@ -1,0 +1,46 @@
+name: Red Team Promotion Gate CI
+
+on:
+  push:
+    branches:
+      - feat/red-team-promotion-gate
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Test, typecheck, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Bubblewrap for sandbox tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Typecheck
+        if: always()
+        run: npm run typecheck
+
+      - name: Build
+        if: always()
+        run: npm run build

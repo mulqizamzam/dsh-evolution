@@ -200,13 +200,14 @@ describe('Tool definitions', () => {
   })
 
   describe('promoteTools', () => {
-    it('returns 4 tools', () => {
+    it('returns 5 tools including gate audit history', () => {
       const tools = promoteTools(deps)
-      expect(tools.length).toBe(4)
+      expect(tools.length).toBe(5)
       expect(tools.map(t => t.name)).toContain('evo_promote')
       expect(tools.map(t => t.name)).toContain('evo_rollback')
       expect(tools.map(t => t.name)).toContain('evo_promote_list')
       expect(tools.map(t => t.name)).toContain('evo_promote_decision')
+      expect(tools.map(t => t.name)).toContain('evo_red_team_gate_history')
     })
 
     it('promote rejects non-benchmarked candidate', async () => {

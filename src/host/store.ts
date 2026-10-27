@@ -3,6 +3,8 @@ import { ensureDir, ensureStateRoot, resolveStateRoot } from '../lib/home.ts'
 import type { ContextGet } from '../lib/home.ts'
 import { readJsonSafe, writeJsonAtomic, writeJsonFile, listDir, removeFile, readJsonlSafe, writeJsonlAtomic } from '../lib/fsx.ts'
 import { newId, isoDateTime, versionId, isSafeKey } from '../lib/ids.ts'
+import { createBenchmarkAttestation } from '../lib/provenance.ts'
+import type { PromotionGateRun } from './types.ts'
 import type {
   ExperienceRecord, Pattern, CandidateModule, BenchmarkRun, Version,
 } from './types.ts'
@@ -500,6 +502,9 @@ export class EvolutionStore {
       id: newId(),
       createdAt: createdAt ?? isoDateTime(this.nowFn()),
     }
+    // The store, not the benchmark caller, owns the record attestation.
+    // Overwrite any caller-provided value so callers cannot choose the digest.
+    full.attestation = createBenchmarkAttestation(full as unknown as Record<string, unknown>)
     await writeJsonAtomic(join(this.benchmarkDir(), `${full.id}.json`), full)
     this.invalidateCache()
     return full
@@ -547,6 +552,39 @@ export class EvolutionStore {
     runs.sort((x, y) => (x.createdAt > y.createdAt ? -1 : 1))
     if (!forceRefresh) this._benchmarkByCandidate.set(candidateId, runs)
     return runs
+  }
+
+  // ── Red Team promotion-gate audit ──
+
+  private promotionGateDir(): string { return join(this.root, 'red-team-gates') }
+
+  async addPromotionGateRun(run: Omit<PromotionGateRun, 'id'>): Promise<PromotionGateRun> {
+    const dir = this.promotionGateDir()
+    await ensureDir(dir)
+    const full: PromotionGateRun = { ...run, id: newId() }
+    await writeJsonAtomic(join(dir, `${full.id}.json`), full)
+    return full
+  }
+
+  async listPromotionGateRuns(
+    candidateId?: string,
+    limit: number = 50,
+  ): Promise<PromotionGateRun[]> {
+    const dir = this.promotionGateDir()
+    await ensureDir(dir)
+    const files = await listDir(dir, Number.MAX_SAFE_INTEGER)
+    const records: PromotionGateRun[] = []
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue
+      const data = await readJsonSafe(join(dir, file))
+      if (!data || typeof data !== 'object') continue
+      const record = data as PromotionGateRun
+      if (candidateId !== undefined && record.candidateId !== candidateId) continue
+      if (typeof record.id !== 'string' || typeof record.checkedAt !== 'string') continue
+      records.push(record)
+    }
+    records.sort((a, b) => b.checkedAt.localeCompare(a.checkedAt) || b.id.localeCompare(a.id))
+    return records.slice(0, Math.max(1, Math.min(500, Math.floor(limit))))
   }
 
   // ── Versions ──

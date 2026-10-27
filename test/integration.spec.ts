@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
+import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import type { ModuleDeps, HostLlmGenerateOptions, HostLlmStreamChunk } from '../src/host/types.ts'
 import type { HostContextShape } from '../src/host/dsh.ts'
 import { makeFakeHost } from './helpers/fake-host.ts'
@@ -273,13 +275,16 @@ describe('Phase 7: Evidence-based promotion', () => {
       status: 'draft',
     })
 
-    // Good benchmark: 90% success, 10% error, 20s latency (live evidence)
+    // Current, correctly sealed live evidence.
+    const createdAt = isoDateTime(new Date())
+    const command = 'node candidate-under-test.js'
     await store.addBenchmark({
       mode: 'live',
-      candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 5,
+      candidateId: candidate.id, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 5,
       metrics: { successRate: 0.9, avgScore: 0.85, errorRate: 0.1, avgSteps: 5, avgDurationMs: 20000 },
       passed: true, details: 'All thresholds met.',
-    })
+      command, provenance: createLiveProvenance(candidate.id, 'v1', command, createdAt),
+    }, createdAt)
 
     const { promoteTools } = await import('../src/host/modules/promote/tools.ts')
     const decision = promoteTools(deps).find(t => t.name === 'evo_promote_decision')!
@@ -305,13 +310,18 @@ describe('Phase 7: Evidence-based promotion', () => {
       status: 'draft',
     })
 
-    // Bad benchmark: 40% success, 60% error, 120s latency (live evidence)
+    // This record is structurally valid and attested, but its metrics fail
+    // the policy thresholds. Keep passed=true so the Red Team evidence-integrity
+    // gate passes and the advisory policy can return REJECT with detailed checks.
+    const createdAt = isoDateTime(new Date())
+    const command = 'node candidate-under-test.js'
     await store.addBenchmark({
       mode: 'live',
-      candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 5,
+      candidateId: candidate.id, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 5,
       metrics: { successRate: 0.4, avgScore: 0.3, errorRate: 0.6, avgSteps: 30, avgDurationMs: 120000 },
-      passed: false, details: 'Failed multiple thresholds.',
-    })
+      passed: true, details: 'Metrics fail multiple policy thresholds.',
+      command, provenance: createLiveProvenance(candidate.id, 'v1', command, createdAt),
+    }, createdAt)
 
     const { promoteTools } = await import('../src/host/modules/promote/tools.ts')
     const decision = promoteTools(deps).find(t => t.name === 'evo_promote_decision')!
@@ -334,7 +344,7 @@ describe('Phase 7: Evidence-based promotion', () => {
     })
     await store.addBenchmark({
       mode: 'simulated',
-      candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 5,
+      candidateId: candidate.id, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 5,
       metrics: { successRate: 0.95, avgScore: 0.9, errorRate: 0.02, avgSteps: 3, avgDurationMs: 5000 },
       passed: true, details: 'simulated only',
     })
@@ -342,14 +352,16 @@ describe('Phase 7: Evidence-based promotion', () => {
     const { promoteTools: pt } = await import('../src/host/modules/promote/tools.ts')
     const decision = pt(deps).find(t => t.name === 'evo_promote_decision')!
 
-    const refused = await decision.execute({ candidateId: candidate.id } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; error: string; evidenceMode: string }
+    const refused = await decision.execute({ candidateId: candidate.id } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; error: string; redTeamGate?: { verdict: string } }
     expect(refused.ok).toBe(false)
-    expect(refused.evidenceMode).toBe('simulated')
-    expect(refused.error).toContain('SIMULATED')
+    expect(refused.redTeamGate?.verdict).toBe('FAIL')
+    expect(refused.error).toMatch(/red-team promotion gate FAIL/i)
 
-    const overridden = await decision.execute({ candidateId: candidate.id, allowSimulated: true } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; evidenceMode: string }
-    expect(overridden.ok).toBe(true)
-    expect(overridden.evidenceMode).toBe('simulated')
+    // allowSimulated is a legacy advisory option and must not override the runtime gate.
+    const overridden = await decision.execute({ candidateId: candidate.id, allowSimulated: true } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; error: string; redTeamGate?: { verdict: string } }
+    expect(overridden.ok).toBe(false)
+    expect(overridden.redTeamGate?.verdict).toBe('FAIL')
+    expect(overridden.error).toMatch(/red-team promotion gate FAIL/i)
   })
 })
 

@@ -230,3 +230,70 @@ is false, that a valid explicit `evo_promote` call can still pass the normal
 promotion gates, and that `evo_rollback` remains available. This contract does
 not weaken evidence, comparative-promotion, artifact-validation, or sandbox
 requirements.
+
+
+
+---
+
+## C-3 — Red Team Promotion Gate
+
+**Ratified:** explicit operator instruction on 2026-10-27 to implement a
+runtime Red Team gate whose only promotable verdict is PASS, together with
+adversarial regression tests.
+
+### The rule
+
+Every candidate promotion path must pass the shared runtime Red Team gate
+before artifact pre-flight, version creation, or activation mutation. The gate
+returns one of **PASS**, **FAIL**, or **INCONCLUSIVE**, with per-check reasons
+and the benchmark record ID when available.
+
+- **PASS** is the only verdict that may proceed to the existing promotion
+  policy and activation pre-flight.
+- **FAIL** blocks promotion when evidence is explicitly simulated or failed,
+  provenance is invalid, the record attestation mismatches, or metrics/run
+  metadata are malformed or out of range.
+- **INCONCLUSIVE** also blocks promotion when evidence is absent, non-live,
+  unrecognised, legacy/unattested, or cannot be verified. Missing information
+  is not treated as a passing result.
+- The manual `evo_promote` path, autonomous `evo_full_cycle` path, and
+  advisory `evo_promote_decision` must all use or report this same gate.
+  `evo_promote_decision` must not recommend promotion when the gate is not
+  PASS.
+- A benchmark must also bind to the candidate's immutable `parentVersion`:
+  the benchmark's `version` and any supplied `parentVersion` must match that
+  creation-time parent, preventing cross-version evidence replay.
+- The gate does not replace the existing comparative `beats_active` policy,
+  artifact validation, activation pre-flight, or sandbox controls. Those gates
+  still run after a PASS.
+
+### Evidence integrity
+
+`EvolutionStore.addBenchmark` generates an integrity attestation over the
+complete persisted benchmark record, including metrics, outcome, execution
+metadata, thresholds, provenance, and captured case results. Promotion verifies
+the attestation and the existing live provenance seal. The store, not the
+calling tool, derives the attestation.
+
+This deliberately supersedes the earlier C-1 section's undecided treatment of
+missing/unrecognised benchmark modes and its pre-seal compatibility allowance
+for *candidate promotion evidence*: records without an attestation are now
+INCONCLUSIVE and must be re-benchmarked through a current supported live path.
+C-1 still independently rejects simulated evidence, including first promotion.
+This contract does not require an active baseline when none exists and does not
+change the current `beats_active` rule for absent comparable baselines.
+
+### Scope and residual limitation
+
+The attestation is an **unkeyed SHA-256 integrity digest**, not a digital
+signature or proof of sandbox execution. It detects partial/persisted record
+changes when the digest is not recomputed, including metric-only changes that
+the older provenance seal does not cover. It cannot authenticate against an
+attacker who can rewrite the record and recompute the digest, or compromise the
+running host/code. The host/plugin boundary and state-root access controls
+remain the trust boundary for that stronger threat model.
+
+C-3 does not change C-2: `evolution.promotion.enabled` still gates automatic
+promotion only; explicit `evo_promote` and recovery through `evo_rollback`
+remain available. This gate applies to promotion of a new candidate, not to
+rollback/recovery.

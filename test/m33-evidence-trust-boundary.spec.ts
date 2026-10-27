@@ -52,10 +52,13 @@ function makeDeps(store: EvolutionStore, root: string): ModuleDeps {
 
 /** Add a simulated benchmark for a candidate. */
 async function addSimBenchmark(store: EvolutionStore, candidateId: string, successRate: number): Promise<BenchmarkRun> {
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
   return store.addBenchmark({
     candidateId,
-    version: 'v-temp',
-    baseline: 'unknown',
+    version: candidate.parentVersion,
+    baseline: candidate.parentVersion,
+    parentVersion: candidate.parentVersion,
     runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 100 },
     passed: successRate >= 0.8,
@@ -77,11 +80,15 @@ async function addLiveBenchmark(
   command = 'node test.js',
 ): Promise<BenchmarkRun> {
   const createdAt = isoDateTime(new Date())
-  const provenance = createLiveProvenance(candidateId, 'v-temp', command, createdAt)
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
+  const version = candidate.parentVersion
+  const provenance = createLiveProvenance(candidateId, version, command, createdAt)
   return store.addBenchmark({
     candidateId,
-    version: 'v-temp',
-    baseline: 'unknown',
+    version,
+    baseline: version,
+    parentVersion: version,
     runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 200 },
     passed: successRate >= 0.8,
@@ -172,7 +179,7 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       const result = await tool.execute({ candidateId: v2Id } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; error?: string }
 
       expect(result.ok).toBe(false)
-      expect(result.error).toMatch(/no live benchmark|simulated evidence cannot promote/)
+      expect(result.error).toMatch(/red-team promotion gate|simulated evidence|live benchmark/i)
     } finally { await rm(root, { recursive: true, force: true }) }
   })
 
@@ -245,8 +252,8 @@ describe('M3.3 — Evidence Trust Boundary', () => {
 
       // Create a live benchmark for v2 with a deliberately WRONG provenance.
       const createdAt = isoDateTime(new Date())
-      const goodProvenance = createLiveProvenance(v2Id, 'v-temp', 'node test.js', createdAt)
-      const badProvenance = createLiveProvenance(v1Id, 'v-temp', 'node test.js', createdAt) // uses v1Id, not v2Id
+      const goodProvenance = createLiveProvenance(v2Id, 'v1', 'node test.js', createdAt)
+      const badProvenance = createLiveProvenance(v1Id, 'v0', 'node test.js', createdAt) // uses v1Id, not v2Id
 
       const record = await store.addBenchmark({
         candidateId: v2Id,
@@ -269,7 +276,7 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       // Provenance seal mismatch → rejected (consistency failure, not tampering)
       expect(result.ok).toBe(false)
       if (!result.ok) {
-        expect(result.error).toMatch(/provenance.*mismatch|consistency/i)
+        expect(result.error).toMatch(/red-team promotion gate FAIL|provenance.*seal|candidate-parent-binding/i)
       }
       void record
     } finally { await rm(root, { recursive: true, force: true }) }
@@ -332,23 +339,21 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       // → re-derivation uses v2.id → mismatch → rejected
       expect(result.ok).toBe(false)
       if (!result.ok) {
-        expect(result.error).toMatch(/provenance.*mismatch|consistency/i)
+        expect(result.error).toMatch(/red-team promotion gate FAIL|provenance.*seal|candidate-parent-binding/i)
       }
     } finally { await rm(root, { recursive: true, force: true }) }
   })
 
   // 7 ────────────────────────────────────────────────────────────────────────
-  it('replay: simulated→live mode flip without provenance — tool path safe, direct policy path documents residual gap', async () => {
+  it('replay: simulated→live mode flip without provenance is rejected by runtime gate and tool', async () => {
     const root = await mkdtemp(join(tmpdir(), 'm33-replay-'))
     try {
       const store = new EvolutionStore({ fallbackRoot: root })
       await store.init()
       const { v2Id } = await setupActiveLive(store, root, 0.95)
 
-      // Attacker edits the v2 benchmark JSON: changes mode from simulated to live
-      // and bumps metrics to 0.98 — but the store's provenance check sees
-      // candidateLatest.mode === 'simulated' still or no provenance.
-      // In this test the attacker does NOT add a provenance seal.
+      // Attacker edits the persisted record after store attestation, changing
+      // mode and metrics without being able to re-issue the trusted attestation.
       const simRecord = await addSimBenchmark(store, v2Id, 0.98)
       // Directly tamper: set mode to live but do NOT add a valid provenance
       await tamperBenchmarkFile(root, simRecord.id, { mode: 'live', metrics: { ...simRecord.metrics, successRate: 0.98 } })
@@ -357,39 +362,17 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       const candidate = await store.getCandidate(v2Id)!
       const result = await evaluatePromotionPolicy(deps, candidate)
 
-      // mode is 'live' but provenance is undefined (never sealed) — provenance check
-      // only runs when `candidateLatest.provenance` is set (truthy). When absent,
-      // the beats_active gate runs and the candidate is compared against active.
-      // 0.98 > 0.95 so this case would pass.  The point of this test is that
-      // the simulation→live replay is caught by Fix B (evo_promote tool check)
-      // when called through the tool path.  evaluatePromotionPolicy itself
-      // allows this because the seal is absent (backward-compatible).
-      //
-      // The tool path (Fix B) will reject it because it requires mode === 'live'
-      // AND that path only goes through evo_promote which calls
-      // evaluatePromotionPolicy.
-      //
-      // For the tool path we need to verify the tool itself rejects.
+      // Both policy and tool paths must reject the tampered persisted record.
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toMatch(/red-team promotion gate|attestation/i)
+
       const { promoteTools } = await import('../src/host/modules/promote/tools.ts')
       const tool = promoteTools(deps).find(t => t.name === 'evo_promote')!
-      const toolResult = await tool.execute({ candidateId: v2Id } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; error?: string }
+      const toolResult = await tool.execute({ candidateId: v2Id } as never, { signal: AbortSignal.timeout(5000) }) as { ok: boolean; error?: string; redTeamGate?: { verdict: string } }
 
-      // The tampered record now has mode='live' so the tool-level check passes,
-      // but the policy gate (beats_active) may pass too since 0.98 > 0.95.
-      // The real protection here is that a FORGED record without provenance
-      // is still accepted by the tool — the next run of evo_full_cycle or a
-      // manual evo_benchmark_live call will overwrite with a properly sealed record.
-      //
-      // This test documents the residual gap: a tampered record that already
-      // has mode='live' and high metrics can still pass.  The provenance seal
-      // (Fix C) is the complete solution.  In this test the attacker did NOT
-      // add a provenance seal, so the provenance check in evaluatePromotionPolicy
-      // is skipped (provenance is undefined → not verified).  The gate is
-      // beats_active only.
-      //
-      // To properly demonstrate the rejection we would need the attacker to also
-      // forge the provenance field — which is covered by tests 5 and 6.
-      expect(typeof toolResult).toBe('object')
+      expect(toolResult.ok).toBe(false)
+      expect(toolResult.redTeamGate?.verdict).toMatch(/FAIL|INCONCLUSIVE/)
+      if (!toolResult.ok) expect(toolResult.error).toMatch(/red-team promotion gate|attestation|provenance/i)
     } finally { await rm(root, { recursive: true, force: true }) }
   })
 
@@ -439,7 +422,7 @@ describe('M3.3 — Evidence Trust Boundary', () => {
   })
 
   // 8 ────────────────────────────────────────────────────────────────────────
-  it('persisted mode tampering is detectable; metrics-only tampering on a sealed record is not (documented limitation)', async () => {
+  it('persisted mode and metrics-only tampering are rejected by the Red Team gate', async () => {
     const root = await mkdtemp(join(tmpdir(), 'm33-tamper-'))
     try {
       const store = new EvolutionStore({ fallbackRoot: root })
@@ -477,24 +460,15 @@ describe('M3.3 — Evidence Trust Boundary', () => {
       let result = await evaluatePromotionPolicy(deps, await store.getCandidate(v2.id)!)
       expect(result.ok).toBe(true)
 
-      // Attacker tampers: change metrics.successRate to 1.0 (a "perfect" run)
-      // but the provenance seal is still the original one.  The seal was
-      // computed over (candidateId, version, command, createdAt) — none of
-      // those fields changed — so the seal still matches.  The tampering
-      // only affected the metrics blob, which is NOT part of the seal.
-      // This demonstrates the limitation: the seal verifies execution context
-      // integrity, not metrics integrity.
+      // The legacy provenance seal does not bind metrics. The full-record
+      // attestation does, so a metrics-only edit must now fail closed.
       await tamperBenchmarkFile(root, goodRecord.id, { metrics: { successRate: 1.0, avgScore: 1.0, errorRate: 0, avgSteps: 0, avgDurationMs: 50 } })
 
       result = await evaluatePromotionPolicy(deps, await store.getCandidate(v2.id)!)
-      // The seal still matches (createdAt unchanged), so the policy gate
-      // passes.  This is the expected behavior: the seal is a liveness
-      // marker, not a metrics integrity guarantee.
-      //
-      // A stronger seal would include the metrics hash, but that would
-      // invalidate legitimate re-reads of unchanged metrics.  The current
-      // design is the minimal mechanism justified by the mission scope.
-      expect(result.ok).toBe(true)
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toMatch(/content does not match.*attestation/i)
+      }
 
       // Now verify that a tampered seal IS caught: attacker changes mode to
       // 'simulated' → policy rejects (candidate now has simulated evidence)

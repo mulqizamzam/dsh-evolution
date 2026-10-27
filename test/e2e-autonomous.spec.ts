@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
+import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
 import type { HostContextShape } from '../src/host/dsh.ts'
 import { NodeProcessSandbox } from '../src/host/modules/sandbox/index.ts'
@@ -211,18 +213,20 @@ export default POLICY
       status: 'draft',
     })
 
-    // Add a good benchmark: 90% success, 10% error, 20s latency
+    // Add valid live evidence so allowSimulated is not needed.
+    const createdAt = isoDateTime(new Date())
+    const command = 'node candidate-under-test.js'
     await store.addBenchmark({
-      candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
+      candidateId: candidate.id, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 3,
       metrics: { successRate: 0.9, avgScore: 0.85, errorRate: 0.1, avgSteps: 5, avgDurationMs: 20000 },
-      passed: true, details: 'All thresholds met.',
-    })
+      passed: true, details: 'All thresholds met.', mode: 'live', command,
+      provenance: createLiveProvenance(candidate.id, 'v1', command, createdAt),
+    }, createdAt)
 
     const promoteT = promoteTools(deps)
     const decision = promoteT.find(t => t.name === 'evo_promote_decision')!
-    // The seeded record is simulated, so the decision needs the explicit override.
-    const result = await decision.execute({ candidateId: candidate.id, allowSimulated: true } as never, exec) as {
-      ok: boolean; recommendation: string; checks?: Array<{ gate: string; pass: boolean }>
+    const result = await decision.execute({ candidateId: candidate.id } as never, exec) as {
+      ok: boolean; recommendation: string; checks?: Array<{ gate: string; pass: boolean }>; redTeamGate?: { verdict: string }
     }
     expect(result.ok).toBe(true)
     // The recommendation depends on all gates passing
@@ -244,21 +248,26 @@ export default POLICY
       status: 'draft',
     })
 
-    // Add a bad benchmark: 50% success, 50% error, 80s latency
+    // This evidence is well-formed but explicitly failed, which must be a
+    // Red Team FAIL and therefore an immediate, auditable rejection.
+    const createdAt = isoDateTime(new Date())
+    const command = 'node candidate-under-test.js'
     await store.addBenchmark({
-      candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
+      candidateId: candidate.id, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 3,
       metrics: { successRate: 0.5, avgScore: 0.4, errorRate: 0.5, avgSteps: 25, avgDurationMs: 80000 },
-      passed: false, details: 'Failed thresholds.',
-    })
+      passed: false, details: 'Failed thresholds.', mode: 'live', command,
+      provenance: createLiveProvenance(candidate.id, 'v1', command, createdAt),
+    }, createdAt)
 
     const promoteT = promoteTools(deps)
     const decision = promoteT.find(t => t.name === 'evo_promote_decision')!
-    const result = await decision.execute({ candidateId: candidate.id, allowSimulated: true } as never, exec) as {
-      ok: boolean; recommendation: string; rejectionReasons: string[]
+    const result = await decision.execute({ candidateId: candidate.id } as never, exec) as {
+      ok: boolean; recommendation: string; error?: string; redTeamGate?: { verdict: string }
     }
-    expect(result.ok).toBe(true)
+    expect(result.ok).toBe(false)
     expect(result.recommendation).toBe('REJECT')
-    expect(result.rejectionReasons.length).toBeGreaterThan(0)
+    expect(result.redTeamGate?.verdict).toBe('FAIL')
+    expect(result.error).toMatch(/red-team promotion gate FAIL/i)
   })
 
   it('promote rejects draft candidate', async () => {

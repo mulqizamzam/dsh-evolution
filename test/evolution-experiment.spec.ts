@@ -21,6 +21,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
+import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import type { ModuleDeps, HostContextShape } from '../src/host/types.ts'
 import { experienceTools } from '../src/host/modules/experience/tools.ts'
 import { benchmarkTools } from '../src/host/modules/benchmark/tools.ts'
@@ -170,13 +172,17 @@ describe('CUMULATIVE IMPROVEMENT EXPERIMENT', () => {
     expect(v1result.metrics.successRate).toBe(0)
     expect(v1result.sampleStdout).toBe('epsilon\ngamma\nbeta\nalpha\ndelta\n')
 
+    const createdAt = isoDateTime(new Date())
+    const command = 'node run.js'
     await store.addBenchmark({
-      candidateId: v1id, version: 'v1', baseline: 'v1', runs: 3,
+      candidateId: v1id, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 3,
       metrics: v1result.metrics,
       passed: false,
       details: 'v1 live: 0/3 runs passed. stdout=' + JSON.stringify(v1result.sampleStdout),
       mode: 'live',
-    })
+      command,
+      provenance: createLiveProvenance(v1id, 'v1', command, createdAt),
+    }, createdAt)
     await store.updateCandidate(v1id, { status: 'benchmarked' })
   })
 
@@ -194,13 +200,17 @@ describe('CUMULATIVE IMPROVEMENT EXPERIMENT', () => {
     expect(v2result.metrics.successRate).toBe(1)
     expect(v2result.sampleStdout).toBe(EXPECTED_OUTPUT)
 
+    const createdAt = isoDateTime(new Date())
+    const command = 'node run.js'
     await store.addBenchmark({
-      candidateId: v2id, version: 'v1', baseline: 'v1', runs: 3,
+      candidateId: v2id, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 3,
       metrics: v2result.metrics,
       passed: true,
       details: 'v2 live: 3/3 runs passed. stdout=' + JSON.stringify(v2result.sampleStdout),
       mode: 'live',
-    })
+      command,
+      provenance: createLiveProvenance(v2id, 'v1', command, createdAt),
+    }, createdAt)
     await store.updateCandidate(v2id, { status: 'benchmarked' })
   })
 

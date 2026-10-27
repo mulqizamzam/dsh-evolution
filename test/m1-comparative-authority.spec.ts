@@ -17,6 +17,7 @@ import { access } from 'node:fs/promises'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import type { ModuleDeps, HostContextShape } from '../src/host/types.ts'
 import { runPromotionPolicy } from '../src/host/modules/promote/index.ts'
 
@@ -37,9 +38,14 @@ async function runBenchmark(
   successRate: number,
   mode: 'live' | 'simulated' = 'live',
 ) {
+  const createdAt = isoDateTime(new Date())
+  const command = 'node candidate-under-test.js'
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
+  const version = candidate.parentVersion
   await store.addBenchmark({
     candidateId,
-    version: 'v-temp',
+    version,
     baseline: 'unknown',
     runs: 10,
     metrics: {
@@ -51,9 +57,13 @@ async function runBenchmark(
     },
     passed: successRate >= 0.8,
     details: `benchmark rate=${successRate}`,
-    createdAt: isoDateTime(new Date()),
+    createdAt,
     mode,
-  })
+    ...(mode === 'live' ? {
+      command,
+      provenance: createLiveProvenance(candidateId, version, command, createdAt),
+    } : {}),
+  }, createdAt)
   await store.updateCandidate(candidateId, { status: 'benchmarked' })
 }
 

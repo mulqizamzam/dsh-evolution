@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import type { ModuleDeps, HostContextShape } from '../src/host/types.ts'
 
 function makeCtx(): HostContextShape {
@@ -28,9 +29,14 @@ function makeCtx(): HostContextShape {
 async function runBenchmark(store: EvolutionStore, candidateId: string, successRate: number) {
   const totalRuns = 10
   const successCount = Math.round(totalRuns * successRate)
+  const createdAt = isoDateTime(new Date())
+  const command = 'node candidate-under-test.js'
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
+  const version = candidate.parentVersion
   await store.addBenchmark({
     candidateId,
-    version: 'v-temp',
+    version,
     baseline: 'unknown',
     runs: totalRuns,
     metrics: {
@@ -41,10 +47,12 @@ async function runBenchmark(store: EvolutionStore, candidateId: string, successR
       avgDurationMs: 100,
     },
     passed: successRate >= 0.8,
-    details: `simulated benchmark rate=${successRate}`,
-    createdAt: isoDateTime(new Date()),
+    details: `live benchmark rate=${successRate}`,
+    createdAt,
     mode: 'live',
-  })
+    command,
+    provenance: createLiveProvenance(candidateId, version, command, createdAt),
+  }, createdAt)
   // Mark candidate as benchmarked (evo_promote requires this status)
   await store.updateCandidate(candidateId, { status: 'benchmarked' })
 }

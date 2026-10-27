@@ -19,6 +19,8 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EvolutionStore } from '../src/host/store.ts'
+import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import { resolveConfig } from '../src/host/config.ts'
 import { makeFakeHost } from './helpers/fake-host.ts'
 import type { FakeHost } from './helpers/fake-host.ts'
@@ -81,21 +83,21 @@ async function seedCandidate(
   })
   if (opts?.withBenchmark !== false) {
     const rate = opts?.successRate ?? 0.99
-    // Unsealed live record (no provenance) — evaluatePromotionPolicy at
-    // promote/index.ts:78-93 tolerates unsealed records when BOTH sides are
-    // unsealed, falling back to beats_active comparison. Mirrors the pattern
-    // used in cumulative-composition.spec.ts for deterministic seeding.
+    const createdAt = isoDateTime(new Date())
+    const command = 'node candidate-under-test.js'
     await store.addBenchmark({
       mode: 'live',
       candidateId: candidate.id,
       version: candidate.parentVersion,
       baseline: candidate.parentVersion,
+      parentVersion: candidate.parentVersion,
       runs: 3,
       metrics: { successRate: rate, avgScore: rate, errorRate: 0, avgSteps: 3, avgDurationMs: 100 },
       passed: true,
       details: 'live evidence for mission-b',
-      createdAt: new Date().toISOString(),
-    })
+      command,
+      provenance: createLiveProvenance(candidate.id, candidate.parentVersion, command, createdAt),
+    }, createdAt)
   }
   await store.updateCandidate(candidate.id, { status: opts?.status ?? 'benchmarked' })
   return candidate

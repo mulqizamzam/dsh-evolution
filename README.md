@@ -41,6 +41,7 @@ Experience store ──► Pattern analysis ──► Candidate generation
 - **Evidence-linked analysis** — patterns can be traced to the experience records that support them.
 - **Candidate lifecycle management** — create, inspect, and list proposed changes.
 - **Benchmarking** — run threshold-based checks, compare results, and perform live or A/B benchmark runs.
+- **Red Team promotion gate** — every new candidate promotion requires PASS from a fail-closed evidence-integrity gate; missing or unverifiable evidence blocks promotion with per-check reasons.
 - **Controlled promotion** — autonomous promotion is disabled by default and depends on benchmark evidence.
 - **Version history and rollback** — versioned artifacts support recovery to a prior version.
 - **Sandboxed execution** — the dedicated sandbox tool requires Bubblewrap (`bwrap`) and refuses execution when it is unavailable.
@@ -210,7 +211,8 @@ Tools are grouped by task rather than listed as one long catalog.
 | `evo_benchmark_compare` | Compare benchmark metrics against thresholds. |
 | `evo_benchmark_live` | Run a command in a live sandbox and return output, exit code, and timing. |
 | `evo_benchmark_ab` | Compare a candidate with its baseline across multiple sandboxed runs. |
-| `evo_promote_decision` | Evaluate the latest benchmark evidence against the promotion policy. |
+| `evo_promote_decision` | Evaluate the latest benchmark evidence against the promotion policy and Red Team gate. |
+| `evo_red_team_gate_history` | Inspect persisted Red Team gate verdicts and per-check reasons. |
 | `evo_promote` | Promote an eligible, benchmarked candidate to a new version. |
 | `evo_promote_list` | List version history. |
 | `evo_rollback` | Restore a previous version. |

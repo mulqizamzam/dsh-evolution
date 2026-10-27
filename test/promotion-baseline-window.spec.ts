@@ -57,11 +57,14 @@ async function addLive(
 ): Promise<BenchmarkRun> {
   const createdAt = isoDateTime(new Date())
   const command = 'node test.js'
+  const candidate = await store.getCandidate(candidateId)
+  if (!candidate) throw new Error('candidate fixture missing')
+  const version = candidate.parentVersion
   return store.addBenchmark({
-    candidateId, version: 'v-temp', baseline: 'unknown', runs: 5,
+    candidateId, version, baseline: version, parentVersion: version, runs: 5,
     metrics: { successRate, avgScore: successRate, errorRate: 1 - successRate, avgSteps: 0, avgDurationMs: 200 },
     passed: successRate >= 0.8, details: 'live sandbox execution: exit 0', mode: 'live', command,
-    ...(opts.sealed ? { provenance: createLiveProvenance(candidateId, 'v-temp', command, createdAt) } : {}),
+    ...(opts.sealed ? { provenance: createLiveProvenance(candidateId, version, command, createdAt) } : {}),
   }, createdAt)
 }
 
@@ -95,7 +98,7 @@ describe('promotion gates do not depend on the benchmark list window', () => {
       await store.createVersion({ label: 'v1', reason: 'release', promotedFrom: 'v0', modules: [v1.id] })
 
       const v2 = await seedCandidate(store, 'v2', 'v1')
-      await addLive(store, v2.id, 0.60, { sealed: true })
+      await addLive(store, v2.id, 0.81, { sealed: true })
 
       // Control: with the baseline inside the window the gate rejects.
       const control = await evaluatePromotionPolicy(deps, (await store.getCandidate(v2.id))!)
@@ -129,13 +132,13 @@ describe('promotion gates do not depend on the benchmark list window', () => {
 
       const control = await evaluatePromotionPolicy(deps, (await store.getCandidate(v2.id))!)
       expect(control.ok).toBe(false)
-      if (!control.ok) expect(control.error).toMatch(/provenance seal missing/)
+      if (!control.ok) expect(control.error).toMatch(/provenance.*seal|INCONCLUSIVE/)
 
       await pushBaselineOutOfWindow(store, activeRec, 520)
 
       const policy = await evaluatePromotionPolicy(deps, (await store.getCandidate(v2.id))!)
       expect(policy.ok).toBe(false)
-      if (!policy.ok) expect(policy.error).toMatch(/provenance seal missing/)
+      if (!policy.ok) expect(policy.error).toMatch(/provenance-seal|no provenance seal/i)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

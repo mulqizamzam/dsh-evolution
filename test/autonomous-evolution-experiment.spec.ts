@@ -16,6 +16,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
+import { isoDateTime } from '../src/lib/ids.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import type { ModuleDeps, HostLlmGenerateOptions, HostLlmStreamChunk } from '../src/host/types.ts'
 import type { HostContextShape } from '../src/host/dsh.ts'
 import { experienceTools } from '../src/host/modules/experience/tools.ts'
@@ -382,14 +384,15 @@ describe('AUTONOMOUS EVOLUTION EXPERIMENT', () => {
       timeoutMs: 30_000,
     } as never, exec)
 
-    // Persist the measured failure with the exact metrics the gate will read.
-    // mode: 'live' is required for the beats_active gate to compare against.
+    // Persist the measured failure with explicit integrity metadata.
+    const v1CreatedAt = isoDateTime(new Date())
     await store.addBenchmark({
-      candidateId: v1id, version: 'v1', baseline: 'v1', runs: 1,
+      candidateId: v1id, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 1,
       metrics: { successRate: 0, avgScore: 0, errorRate: 0, avgSteps: 1, avgDurationMs: 200 },
-      passed: false, details: 'v1: failed oracle', mode: 'live',
+      passed: false, details: 'v1: failed oracle', mode: 'live', command: BENCH_COMMAND,
+      provenance: createLiveProvenance(v1id, 'v1', BENCH_COMMAND, v1CreatedAt),
       expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE,
-    })
+    }, v1CreatedAt)
     await store.updateCandidate(v1id, { status: 'benchmarked' })
 
     // Make the v1 candidate the active version (modules must be string IDs)
@@ -423,12 +426,15 @@ describe('AUTONOMOUS EVOLUTION EXPERIMENT', () => {
         timeoutMs: 30_000,
       } as never, exec)
     }
+    const candidateCreatedAt = isoDateTime(new Date())
     await store.addBenchmark({
-      candidateId: genResult.candidateId, version: 'v1', baseline: 'v1', runs: 3,
+      candidateId: genResult.candidateId, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 3,
       metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 200 },
       passed: true, details: 'AGNES: 3/3 passed',
-      mode: 'live', expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE,
-    })
+      mode: 'live', command: BENCH_COMMAND,
+      provenance: createLiveProvenance(genResult.candidateId, 'v1', BENCH_COMMAND, candidateCreatedAt),
+      expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE,
+    }, candidateCreatedAt)
     await store.updateCandidate(genResult.candidateId, { status: 'benchmarked' })
 
     // Verify state before promotion decision
@@ -653,12 +659,15 @@ describe('AUTONOMOUS EVOLUTION EXPERIMENT', () => {
         timeoutMs: 30_000,
       } as never, exec)
     }
+    const candidateCreatedAt = isoDateTime(new Date())
     await store.addBenchmark({
-      candidateId: genResult.candidateId, version: 'v1', baseline: 'v1', runs: 3,
+      candidateId: genResult.candidateId, version: 'v1', baseline: 'v1', parentVersion: 'v1', runs: 3,
       metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 200 },
       passed: true, details: 'AGNES: 3/3 passed',
-      mode: 'live', expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE,
-    })
+      mode: 'live', command: BENCH_COMMAND,
+      provenance: createLiveProvenance(genResult.candidateId, 'v1', BENCH_COMMAND, candidateCreatedAt),
+      expectedOutput: EXPECTED_OUTPUT, expectedExitCode: EXPECTED_EXIT_CODE,
+    }, candidateCreatedAt)
     await store.updateCandidate(genResult.candidateId, { status: 'benchmarked' })
 
     const promoteT = promoteTools(deps)
