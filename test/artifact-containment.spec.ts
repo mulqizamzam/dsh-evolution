@@ -28,6 +28,7 @@ import { containPath, isContainedPath } from '../src/lib/contain.ts'
 import { validateCandidateFileSet } from '../src/host/modules/builder/tools.ts'
 import { benchmarkTools } from '../src/host/modules/benchmark/tools.ts'
 import type { ModuleDeps, CandidateFileSet, CandidateModule, Version } from '../src/host/types.ts'
+import { addSealedLiveBenchmark } from './helpers/live-evidence.ts'
 
 // ── helpers ──
 
@@ -738,7 +739,7 @@ describe('falsification — skip-the-builder and destructive-path probes', () =>
     // Candidate is BENCHMARKED (so the status gate passes) but its persisted
     // files carry traversal — the only defense is the final materialize gate.
     const cand = await addCandidate(store, [{ path: 'src/index.ts', content: 'ok' }])
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       mode: 'live', candidateId: cand.id, version: 'v1', baseline: 'v1', runs: 3,
       metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 0, avgDurationMs: 120 },
       passed: true, details: 'live evidence',
