@@ -322,11 +322,15 @@ describe('Cumulative version composition', () => {
       files: [{ path: '../escape.js', content: 'pwn' }],
       tests: [], benchmarkConfig: { ...BENCH_CFG }, status: 'benchmarked',
     })
+    const benchCreatedAt = new Date().toISOString()
+    const benchCommand = 'node candidate-under-test.js'
     await store.addBenchmark({
       mode: 'live', candidateId: evil.id, version: 'v2', baseline: 'v2', runs: 3,
+      command: benchCommand,
+      provenance: createLiveProvenance(evil.id, 'v2', benchCommand, benchCreatedAt),
       metrics: { successRate: 0.999, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 50 },
-      passed: true, details: 'live', createdAt: new Date().toISOString(),
-    })
+      passed: true, details: 'live',
+}, benchCreatedAt)
     const evilResult = await promote(deps, evil.id, 'evil')
     expect(evilResult.ok).toBe(false)
     expect(String(evilResult.error)).toMatch(/escape the artifact files root/)

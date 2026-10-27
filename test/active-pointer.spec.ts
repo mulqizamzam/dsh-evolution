@@ -29,6 +29,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { EvolutionStore, ACTIVE_VERSION_POINTER } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 import { makeFakeHost } from './helpers/fake-host.ts'
 import type { FakeHost } from './helpers/fake-host.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
@@ -64,11 +65,15 @@ async function seedCandidate(store: EvolutionStore, name: string, successRate: n
       avgDurationMs: { max: 60000, weight: 0.5 },
     },
   })
+  const benchCreatedAt = new Date().toISOString()
+  const benchCommand = 'node candidate-under-test.js'
   await store.addBenchmark({
     mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
+    command: benchCommand,
+    provenance: createLiveProvenance(candidate.id, 'v1', benchCommand, benchCreatedAt),
     metrics: { successRate, avgScore: successRate, errorRate: 0, avgSteps: 0, avgDurationMs: 120 },
-    passed: true, details: 'live evidence', createdAt: new Date().toISOString(),
-  })
+    passed: true, details: 'live evidence',
+  }, benchCreatedAt)
   await store.updateCandidate(candidate.id, { status: 'benchmarked' })
   return candidate
 }
@@ -253,11 +258,15 @@ describe('Mission 2.1 — Canonical active-version pointer', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
+    const brokenCreatedAt = new Date().toISOString()
+    const brokenCommand = 'echo broken-candidate-check'
     await store.addBenchmark({
       mode: 'live', candidateId: brokenCandidate.id, version: 'v1', baseline: 'v1', runs: 3,
+      command: brokenCommand,
+      provenance: createLiveProvenance(brokenCandidate.id, 'v1', brokenCommand, brokenCreatedAt),
       metrics: { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
-      passed: true, details: 'simulated', createdAt: new Date().toISOString(),
-    })
+      passed: true, details: 'simulated',
+    }, brokenCreatedAt)
     await store.updateCandidate(brokenCandidate.id, { status: 'benchmarked' })
 
     const host = makeFakeHost()

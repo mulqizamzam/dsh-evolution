@@ -28,6 +28,7 @@ import { containPath, isContainedPath } from '../src/lib/contain.ts'
 import { validateCandidateFileSet } from '../src/host/modules/builder/tools.ts'
 import { benchmarkTools } from '../src/host/modules/benchmark/tools.ts'
 import type { ModuleDeps, CandidateFileSet, CandidateModule, Version } from '../src/host/types.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 
 // ── helpers ──
 
@@ -738,11 +739,15 @@ describe('falsification — skip-the-builder and destructive-path probes', () =>
     // Candidate is BENCHMARKED (so the status gate passes) but its persisted
     // files carry traversal — the only defense is the final materialize gate.
     const cand = await addCandidate(store, [{ path: 'src/index.ts', content: 'ok' }])
+    const benchCreatedAt = new Date().toISOString()
+    const benchCommand = 'node candidate-under-test.js'
     await store.addBenchmark({
       mode: 'live', candidateId: cand.id, version: 'v1', baseline: 'v1', runs: 3,
+      command: benchCommand,
+      provenance: createLiveProvenance(cand.id, 'v1', benchCommand, benchCreatedAt),
       metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 0, avgDurationMs: 120 },
       passed: true, details: 'live evidence',
-    })
+}, benchCreatedAt)
     await store.updateCandidate(cand.id, { status: 'benchmarked' })
     await store.updateCandidate(cand.id, { files: [{ path: '../../escape.js', content: 'pwn' }] })
 

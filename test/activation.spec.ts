@@ -16,6 +16,7 @@ import { resolveConfig } from '../src/host/config.ts'
 import { makeFakeHost } from './helpers/fake-host.ts'
 import type { FakeHost } from './helpers/fake-host.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
+import { createLiveProvenance } from '../src/lib/provenance.ts'
 
 const BOOT = '../src/host/index.ts'
 
@@ -48,11 +49,15 @@ async function seedBenchmarkedCandidate(store: EvolutionStore, entry: string) {
     },
     status: 'draft',
   })
+  const benchCreatedAt = new Date().toISOString()
+  const benchCommand = 'node candidate-under-test.js'
   await store.addBenchmark({
     mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
+    command: benchCommand,
+    provenance: createLiveProvenance(candidate.id, 'v1', benchCommand, benchCreatedAt),
     metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 0, avgDurationMs: 120 },
     passed: true, details: 'live evidence',
-  })
+}, benchCreatedAt)
   await store.updateCandidate(candidate.id, { status: 'benchmarked' })
   return candidate
 }

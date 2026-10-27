@@ -219,19 +219,27 @@ describe('CUMULATIVE IMPROVEMENT EXPERIMENT', () => {
 
     const v1id = await createCandidate(store, 'v1', 'sort-by-id-v1', [{ path: 'run.js', content: V1_RUN_JS }])
     const v1bench = await runLiveBenchmark(deps, v1id, 3)
+    const benchCreatedAt = new Date().toISOString()
+    const benchCommand = 'node candidate-under-test.js'
     await store.addBenchmark({
       candidateId: v1id, version: 'v1', baseline: 'v1', runs: 3,
+      command: benchCommand,
+      provenance: createLiveProvenance(v1id, 'v1', benchCommand, benchCreatedAt),
       metrics: v1bench.metrics, passed: false, details: 'v1 live: 0/3', mode: 'live',
-    })
+}, benchCreatedAt)
     await store.updateCandidate(v1id, { status: 'benchmarked' })
     await store.createVersion({ label: 'v1-active', modules: [v1id] })
 
     const v2id = await createCandidate(store, 'v1', 'sort-by-id-v2', [{ path: 'run.js', content: V2_RUN_JS }])
     const v2bench = await runLiveBenchmark(deps, v2id, 3)
+    const benchCreatedAt2 = new Date().toISOString()
+    const benchCommand2 = 'node candidate-under-test.js'
     await store.addBenchmark({
       candidateId: v2id, version: 'v1', baseline: 'v1', runs: 3,
+      command: benchCommand2,
+      provenance: createLiveProvenance(v2id, 'v1', benchCommand2, benchCreatedAt2),
       metrics: v2bench.metrics, passed: true, details: 'v2 live: 3/3', mode: 'live',
-    })
+}, benchCreatedAt2)
     await store.updateCandidate(v2id, { status: 'benchmarked' })
 
     const decide = promoteTools(deps).find(t => t.name === 'evo_promote_decision')!
