@@ -32,6 +32,7 @@ import type { FakeHost } from './helpers/fake-host.ts'
 import type { ModuleDeps, CandidateModule, Version } from '../src/host/types.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
 import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { addSealedLiveBenchmark } from './helpers/live-evidence.ts'
 import {
   materializeArtifact, validateArtifact, readArtifactManifest,
   artifactFilesDir, readBaseArtifactFiles,
@@ -322,7 +323,7 @@ describe('Cumulative version composition', () => {
       files: [{ path: '../escape.js', content: 'pwn' }],
       tests: [], benchmarkConfig: { ...BENCH_CFG }, status: 'benchmarked',
     })
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       mode: 'live', candidateId: evil.id, version: 'v2', baseline: 'v2', runs: 3,
       metrics: { successRate: 0.999, avgScore: 1, errorRate: 0, avgSteps: 1, avgDurationMs: 50 },
       passed: true, details: 'live', createdAt: new Date().toISOString(),
