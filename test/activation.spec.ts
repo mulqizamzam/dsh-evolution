@@ -16,6 +16,7 @@ import { resolveConfig } from '../src/host/config.ts'
 import { makeFakeHost } from './helpers/fake-host.ts'
 import type { FakeHost } from './helpers/fake-host.ts'
 import type { ModuleDeps } from '../src/host/types.ts'
+import { addSealedLiveBenchmark } from './helpers/live-evidence.ts'
 
 const BOOT = '../src/host/index.ts'
 
@@ -48,7 +49,7 @@ async function seedBenchmarkedCandidate(store: EvolutionStore, entry: string) {
     },
     status: 'draft',
   })
-  await store.addBenchmark({
+  await addSealedLiveBenchmark(store, {
     mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
     metrics: { successRate: 1, avgScore: 1, errorRate: 0, avgSteps: 0, avgDurationMs: 120 },
     passed: true, details: 'live evidence',
