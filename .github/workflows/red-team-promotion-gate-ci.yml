@@ -26,6 +26,11 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Install Bubblewrap for sandbox tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+
       - name: Install locked dependencies
         run: npm ci
 
@@ -33,7 +38,9 @@ jobs:
         run: npm test
 
       - name: Typecheck
+        if: always()
         run: npm run typecheck
 
       - name: Build
+        if: always()
         run: npm run build
