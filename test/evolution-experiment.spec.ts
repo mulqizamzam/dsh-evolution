@@ -23,6 +23,7 @@ import { EvolutionStore } from '../src/host/store.ts'
 import { resolveConfig } from '../src/host/config.ts'
 import { isoDateTime } from '../src/lib/ids.ts'
 import { createLiveProvenance } from '../src/lib/provenance.ts'
+import { addSealedLiveBenchmark } from './helpers/live-evidence.ts'
 import type { ModuleDeps, HostContextShape } from '../src/host/types.ts'
 import { experienceTools } from '../src/host/modules/experience/tools.ts'
 import { benchmarkTools } from '../src/host/modules/benchmark/tools.ts'
@@ -219,7 +220,7 @@ describe('CUMULATIVE IMPROVEMENT EXPERIMENT', () => {
 
     const v1id = await createCandidate(store, 'v1', 'sort-by-id-v1', [{ path: 'run.js', content: V1_RUN_JS }])
     const v1bench = await runLiveBenchmark(deps, v1id, 3)
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       candidateId: v1id, version: 'v1', baseline: 'v1', runs: 3,
       metrics: v1bench.metrics, passed: false, details: 'v1 live: 0/3', mode: 'live',
     })
@@ -228,7 +229,7 @@ describe('CUMULATIVE IMPROVEMENT EXPERIMENT', () => {
 
     const v2id = await createCandidate(store, 'v1', 'sort-by-id-v2', [{ path: 'run.js', content: V2_RUN_JS }])
     const v2bench = await runLiveBenchmark(deps, v2id, 3)
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       candidateId: v2id, version: 'v1', baseline: 'v1', runs: 3,
       metrics: v2bench.metrics, passed: true, details: 'v2 live: 3/3', mode: 'live',
     })
