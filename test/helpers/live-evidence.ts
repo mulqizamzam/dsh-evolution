@@ -16,6 +16,7 @@ export type LiveBenchmarkFixture = Omit<
 > & {
   createdAt?: string
   command?: string
+  mode?: 'live'
 }
 
 export async function addSealedLiveBenchmark(
