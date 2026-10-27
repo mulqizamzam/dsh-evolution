@@ -39,7 +39,7 @@ jobs:
         run: |
           ls -l /usr/bin/bwrap
           bwrap --version
-          bwrap --die-with-parent --unshare-pid --unshare-net --ro-bind /usr /usr --proc /proc --dev /dev /bin/sh -c 'echo bwrap-ok'
+          bwrap --die-with-parent --unshare-pid --unshare-net --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib /lib --ro-bind /lib64 /lib64 --proc /proc --dev /dev /bin/sh -c 'echo bwrap-ok'
 
       - name: Install locked dependencies
         run: npm ci
