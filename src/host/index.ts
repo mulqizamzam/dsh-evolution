@@ -20,6 +20,12 @@ import * as builderModule from './modules/builder/index.ts'
 import * as autoExperienceModule from './modules/auto-experience/index.ts'
 import * as activationModule from './modules/activation/index.ts'
 import * as versionHistoryModule from './modules/version-history/index.ts'
+import * as evidenceScoreModule from './modules/evidence-score/index.ts'
+import * as shadowEvaluationModule from './modules/shadow-evaluation/index.ts'
+import * as memoryLifecycleModule from './modules/memory-lifecycle/index.ts'
+import * as adversarialBenchmarkModule from './modules/adversarial-benchmark/index.ts'
+import * as integrityRedTeamModule from './modules/integrity-red-team/index.ts'
+import * as recoveryDrillModule from './modules/recovery-drill/index.ts'
 
 export const name = 'dsh-evolution'
 
@@ -53,6 +59,12 @@ export const MODULES: EvoModule[] = [
   // Activation mounts the active version's artifact, so it must run last.
   activationModule,
   versionHistoryModule,
+  evidenceScoreModule,
+  shadowEvaluationModule,
+  memoryLifecycleModule,
+  adversarialBenchmarkModule,
+  integrityRedTeamModule,
+  recoveryDrillModule,
 ] as unknown as EvoModule[]
 
 /**

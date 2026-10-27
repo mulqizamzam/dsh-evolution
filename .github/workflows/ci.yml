@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install sandbox runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap apparmor apparmor-utils
+          sudo tee /etc/apparmor.d/bwrap >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+            include if exists <local/bwrap>
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+      - name: Probe sandbox isolation
+        shell: bash
+        run: |
+          set +e
+          NODE_BIN_DIR="$(dirname "$(command -v node)")"
+          bwrap --clearenv \
+            --ro-bind /usr /usr \
+            --ro-bind /lib /lib \
+            --ro-bind /lib64 /lib64 \
+            --ro-bind /bin /bin \
+            --ro-bind /sbin /sbin \
+            --ro-bind /etc/ld.so.cache /etc/ld.so.cache \
+            --ro-bind /etc/ssl /etc/ssl \
+            --ro-bind /etc/resolv.conf /etc/resolv.conf \
+            --ro-bind "$NODE_BIN_DIR" "$NODE_BIN_DIR" \
+            --tmpfs /tmp --proc /proc --dev /dev \
+            --bind "$RUNNER_TEMP" "$RUNNER_TEMP" \
+            --chdir "$RUNNER_TEMP" --unshare-pid --unshare-net \
+            --setenv PATH "$NODE_BIN_DIR:/usr/local/bin:/usr/bin:/bin" \
+            /bin/sh -c 'echo bwrap-ready'
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Bubblewrap isolation probe exited with status $status; inspect stderr above."
+          fi
+          exit 0
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Run tests
+        run: npm test

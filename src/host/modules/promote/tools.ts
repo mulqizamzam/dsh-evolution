@@ -154,7 +154,7 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
           const { refreshActivation, activationState } = await import('../activation/loader.ts')
           await refreshActivation(deps)
           const state = activationState()
-          return neutralizeDeep({ ok: true, versionId, restored: result.restored, deactivated: result.deactivated?.id ?? null, activation: { mountedVersionId: state.activeVersionId, mountedTool: state.activeTool, reason: state.reason } })
+          return neutralizeDeep({ ok: true, versionId, restored: result.restored.id, deactivated: result.deactivated?.id ?? null, activation: { mountedVersionId: state.activeVersionId, mountedTool: state.activeTool, reason: state.reason } })
         }
         // The target has a non-empty modules list, so it was expected to have an
         // artifact.  Validate it before mutating the store.
@@ -183,7 +183,7 @@ export function promoteTools(deps: ModuleDeps): ToolDefinition[] {
         return neutralizeDeep({
           ok: true,
           versionId,
-          restored: result.restored,
+          restored: result.restored.id,
           deactivated: result.deactivated?.id ?? null,
           activation: { mountedVersionId: state.activeVersionId, mountedTool: state.activeTool, reason: state.reason },
         })
