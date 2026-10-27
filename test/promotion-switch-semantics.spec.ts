@@ -205,10 +205,10 @@ describe('evolution.promotion.enabled switch semantics', () => {
       const result = await tool.execute(
         { versionId: original.id } as never,
         { signal: AbortSignal.timeout(10_000) },
-      ) as { ok: boolean; error?: string; restored?: string }
+      ) as { ok: boolean; error?: string; restored?: { id: string } }
 
       expect(result.ok).toBe(true)
-      expect(result.restored).toBe(original.id)
+      expect(result.restored!.id).toBe(original.id)
       expect((await store.getActiveVersion())?.id).toBe(original.id)
     } finally {
       await rm(root, { recursive: true, force: true })
