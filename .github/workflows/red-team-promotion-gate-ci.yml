@@ -30,17 +30,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
+          # The hosted runner disables unprivileged user namespaces. Enable
+          # Bubblewrap's audited setuid mode on this disposable CI VM so its
+          # namespace-based sandbox is actually usable by the runner account.
+          sudo chmod u+s /usr/bin/bwrap
 
-      - name: Diagnose Bubblewrap isolation support
-        continue-on-error: true
+      - name: Verify Bubblewrap isolation support
         run: |
-          id
           ls -l /usr/bin/bwrap
           bwrap --version
-          echo "=== unprivileged namespace test ==="
-          bwrap --die-with-parent --ro-bind /usr /usr --proc /proc --dev /dev /bin/sh -c 'echo bwrap-ok'
-          echo "=== user namespace test ==="
-          unshare -Ur true
+          bwrap --die-with-parent --unshare-pid --unshare-net --ro-bind /usr /usr --proc /proc --dev /dev /bin/sh -c 'echo bwrap-ok'
 
       - name: Install locked dependencies
         run: npm ci
