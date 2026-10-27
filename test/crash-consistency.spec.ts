@@ -111,7 +111,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       mode: 'live', candidateId: candidate.id, version: 'v1', baseline: 'v1', runs: 3,
       metrics: { successRate: 0.95, avgScore: 0.95, errorRate: 0.02, avgSteps: 5, avgDurationMs: 120 },
       passed: true, details: 'live evidence', createdAt: new Date().toISOString(),
@@ -138,7 +138,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       mode: 'live', candidateId: candidate2.id, version: 'v2', baseline: 'v2', runs: 3,
       metrics: { successRate: 0.96, avgScore: 0.96, errorRate: 0.01, avgSteps: 4, avgDurationMs: 115 },
       passed: true, details: 'live evidence', createdAt: new Date().toISOString(),
@@ -183,7 +183,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       mode: 'live', candidateId: brokenCandidate.id, version: 'v1', baseline: 'v1', runs: 3,
       metrics: { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
       passed: true, details: 'simulated', createdAt: new Date().toISOString(),
@@ -258,7 +258,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       mode: 'live', candidateId: broken.id, version: 'v1', baseline: 'v1', runs: 3,
       metrics: { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
       passed: true, details: 'simulated', createdAt: new Date().toISOString(),
@@ -422,7 +422,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       mode: 'live', candidateId: emptyCandidate.id, version: 'v1', baseline: 'v1', runs: 3,
       metrics: { successRate: 0.99, avgScore: 0.99, errorRate: 0, avgSteps: 0, avgDurationMs: 100 },
       passed: true, details: 'simulated', createdAt: new Date().toISOString(),
@@ -452,7 +452,7 @@ describe('Mission 2 — Crash-consistency failure injection', () => {
         avgDurationMs: { max: 60000, weight: 0.5 },
       },
     })
-    await store.addBenchmark({
+    await addSealedLiveBenchmark(store, {
       mode: 'live', candidateId: validCandidate.id, version: 'v1', baseline: 'v1', runs: 3,
       metrics: { successRate: 1.0, avgScore: 1.0, errorRate: 0, avgSteps: 0, avgDurationMs: 120 },
       passed: true, details: 'live evidence', createdAt: new Date().toISOString(),
