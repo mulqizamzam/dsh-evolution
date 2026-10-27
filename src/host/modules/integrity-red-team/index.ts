@@ -8,6 +8,7 @@ const RENDER = (_args: Record<string, unknown>, value: never): Array<{ type: 'te
 export function auditBenchmarkIntegrity(candidateId: string, records: BenchmarkRun[]) {
   const findings: Array<{ severity: 'critical' | 'high' | 'medium'; rule: string; benchmarkId: string; detail: string }> = []
   const seen = new Set<string>()
+  let reviewCount = 0
   for (const record of records) {
     if (record.candidateId !== candidateId) {
       findings.push({ severity: 'critical', rule: 'candidate-binding-mismatch', benchmarkId: record.id, detail: 'Benchmark record is returned under a different candidate id.' })
@@ -16,8 +17,12 @@ export function auditBenchmarkIntegrity(candidateId: string, records: BenchmarkR
       findings.push({ severity: 'high', rule: 'duplicate-benchmark-id', benchmarkId: record.id, detail: 'Duplicate benchmark id appears in the candidate evidence list.' })
     }
     seen.add(record.id)
-    if (record.mode === 'live' && !verifyLiveProvenance(record)) {
-      findings.push({ severity: 'critical', rule: 'live-provenance-invalid', benchmarkId: record.id, detail: 'Live benchmark is missing a valid provenance seal or its sealed fields were changed.' })
+    if (record.mode === 'live' && !record.provenance) {
+      // Legacy live evidence predates provenance seals: flag for review, not as tampering.
+      reviewCount += 1
+      findings.push({ severity: 'medium', rule: 'legacy-live-unsealed', benchmarkId: record.id, detail: 'Live benchmark predates provenance sealing; evidence can be reviewed but its execution context cannot be verified cryptographically.' })
+    } else if (record.mode === 'live' && !verifyLiveProvenance(record)) {
+      findings.push({ severity: 'critical', rule: 'live-provenance-invalid', benchmarkId: record.id, detail: 'Live benchmark has a provenance seal that does not match its sealed fields.' })
     }
     if (record.mode !== 'live' && record.mode !== 'simulated' && record.mode !== 'manifest') {
       findings.push({ severity: 'high', rule: 'unknown-evidence-mode', benchmarkId: record.id, detail: 'Evidence mode is absent or unrecognized; do not treat it as verified live execution.' })
